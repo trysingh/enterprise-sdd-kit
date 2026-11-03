@@ -1,0 +1,37 @@
+<!-- ekit:begin (managed by enterprise-sdd-kit; edit outside this block, `ekit sync` rewrites it) -->
+# Enterprise SDD rules
+
+This repository follows **BRD → PRD → spec → Gherkin → plan → tasks → red → green**, driven by
+Spec Kit commands and enforced by `ekit gate <id>`. Gates are the source of truth: if a gate
+fails, fix the artifact and re-run; never skip, bypass or edit the policy.
+
+## Pipeline
+
+| Step | Command | Gate |
+|------|---------|------|
+| Landing zone (once) | `/speckit.esdlc.baseline` | `ekit gate baseline` |
+| BRD → PRD + questions | `/speckit.esdlc.brd <brd file>` | `ekit gate intake --prd docs/requirements/<slug>` |
+| Answer questions | `/speckit.esdlc.questions` | `ekit gate ready --prd …` |
+| PRD feature → spec | `/speckit.specify FEAT-01` | `ekit gate spec` |
+| Spec → Gherkin | `/speckit.esdlc.gherkin` | `ekit gate scenarios` |
+| Plan | `/speckit.plan` | `ekit gate plan` |
+| Tasks | `/speckit.tasks` | — |
+| Failing tests | `/speckit.esdlc.red` | `ekit gate red` |
+| Code | `/speckit.implement` | `ekit gate green` |
+
+## Non-negotiables
+
+- Never invent business facts. Unknowns go to `docs/requirements/<slug>/open-questions.yaml`.
+- No production behaviour before `ekit gate red` has recorded failing tests for it.
+- Never edit `.feature` files or weaken assertions to make a test pass.
+- Never put secrets, tokens or real customer data in code, tests, fixtures or logs.
+- Run tools through `ekit run <command>` (lint, unit, acceptance, coverage, sca) so the same
+  commands work on Windows and POSIX.
+- Use `ekit context` whenever you need the stack, layout, NFRs or rules.
+
+## Stack: {stack}
+
+Profiles: {profiles}
+
+{agent_rules}
+<!-- ekit:end -->

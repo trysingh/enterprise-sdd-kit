@@ -1,0 +1,45 @@
+apiVersion: ekit/v1
+kind: Profile
+metadata:
+  id: frontend/jinja
+  role: frontend
+  description: Server-rendered Jinja2 templates served by FastAPI; progressive-enhancement vanilla JS
+
+runtime:
+  language: python
+  shares_runtime_with: backend/fastapi   # same process, same tests, same commands
+
+toolchain:
+  - "jinja2 (via fastapi.templating.Jinja2Templates)"
+  - "plain CSS, small vanilla ES modules (no bundler)"
+  - "playwright (python) for browser-level scenarios tagged @ui"
+  - "axe-playwright-python for UX-01"
+
+layout:
+  source: src/app/web           # routes returning TemplateResponse
+  templates: src/app/templates
+  static: src/app/static
+  required_paths:
+    - src/app/templates/base.html
+    - src/app/static/css
+    - src/app/web
+
+commands: {}   # all commands come from backend/fastapi (same root, same test run)
+
+bdd:
+  framework: inherit             # scenarios run in the backend pytest-bdd suite
+  report: null
+
+controls:
+  SEC-07: "Jinja2 autoescape on for .html; `|safe` forbidden unless the template carries a `{# reviewed: ADR-xxx #}` note."
+  SEC-08: "CSRF token injected into base.html forms and verified by middleware."
+  SEC-06: "CSP without 'unsafe-inline'; scripts are external ES modules with nonce if inline is unavoidable."
+  UX-01: "Semantic HTML in templates; axe check in @ui scenarios."
+  UX-02: "Strings via a gettext-style `t()` helper exposed to templates."
+  PERF-02: "No framework; total JS per page < 50 KB."
+
+agent_rules: |
+  - Pages are server-rendered. JavaScript only enhances; every flow works without JS unless the spec says otherwise.
+  - Templates extend `base.html`; never build HTML strings in Python.
+  - No `|safe` and no inline `<script>` without an ADR note.
+  - Browser-level scenarios are tagged @ui and use Playwright from pytest-bdd steps; API-level scenarios use TestClient.

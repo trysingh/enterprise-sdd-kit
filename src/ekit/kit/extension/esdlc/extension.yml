@@ -1,0 +1,69 @@
+schema_version: "1.0"
+
+extension:
+  id: esdlc
+  name: "Enterprise SDLC (BRD > PRD > SDD > TDD)"
+  version: "0.1.0"
+  description: "Adds BRD intake, open-question loop, landing-zone baseline, Gherkin scenarios and red tests, each closed by a deterministic `ekit gate`."
+  category: "process"
+  effect: "read-write"
+  author: "enterprise-sdd-kit"
+  repository: "https://example.invalid/enterprise-sdd-kit"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=1.0.0"
+
+provides:
+  commands:
+    - name: speckit.esdlc.brd
+      file: commands/speckit.esdlc.brd.md
+      description: "Turn a BRD into a normalized BRD, a PRD with acceptance criteria and an open-questions register; run gate intake"
+    - name: speckit.esdlc.questions
+      file: commands/speckit.esdlc.questions.md
+      description: "Work the open-questions register: answer interactively or export/import for the product manager; run gate ready"
+    - name: speckit.esdlc.baseline
+      file: commands/speckit.esdlc.baseline.md
+      description: "Build or assess the engineering landing zone for the project's stack; run gate baseline"
+    - name: speckit.esdlc.gherkin
+      file: commands/speckit.esdlc.gherkin.md
+      description: "Generate tagged Gherkin scenarios from the spec's acceptance criteria; run gate scenarios"
+    - name: speckit.esdlc.red
+      file: commands/speckit.esdlc.red.md
+      description: "Bind every scenario to step definitions/tests that fail for the right reason; run gate red"
+
+  templates:
+    - name: esdlc-brd-template
+      file: templates/esdlc-brd-template.md
+      description: "Normalized BRD with BR-### ids"
+    - name: esdlc-prd-template
+      file: templates/esdlc-prd-template.md
+      description: "PRD with FEAT-## features and AC-### acceptance criteria"
+    - name: esdlc-questions-template
+      file: templates/esdlc-questions-template.md
+      description: "Open questions register"
+    - name: esdlc-trace-template
+      file: templates/esdlc-trace-template.md
+      description: "Feature-to-PRD traceability file"
+    - name: esdlc-conformance-template
+      file: templates/esdlc-conformance-template.md
+      description: "Platform NFR conformance record"
+
+hooks:
+  after_specify:
+    command: speckit.esdlc.gherkin
+    optional: true
+    prompt: "Generate Gherkin scenarios for this spec now?"
+    description: "BDD scenarios are derived from the approved spec before planning"
+  after_tasks:
+    command: speckit.esdlc.red
+    optional: true
+    prompt: "Write the failing acceptance tests (red) now?"
+    description: "Red must be recorded before implementation"
+
+tags:
+  - "enterprise"
+  - "traceability"
+  - "bdd"
+  - "tdd"
+  - "process"

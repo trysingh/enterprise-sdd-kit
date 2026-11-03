@@ -1,0 +1,189 @@
+# Gate policy: the deterministic backbone of the BRD > PRD > SDD > TDD pipeline.
+#
+# Design rules (so the same file can later run in CI / cloud-native pipelines):
+#   * A check is a pure function of repository files + test reports. No prompts, no network.
+#   * Every check has a stable id, a `type` (implemented in ekit/checks.py) and `with:` params.
+#   * `severity: error` fails the gate (exit 1); `warn` is reported only.
+#   * Gates are run with `ekit gate <id> [--feature <dir>] [--format text|json|junit]`.
+#     JUnit output lets any CI (GitHub Actions, GitLab, Azure DevOps, Jenkins) show results
+#     without custom tooling. Later, `runner:` can be set to e.g. `ci-only` per check.
+#   * Projects may relax a check ONLY via .ekit/policy.overrides.yaml, which requires a reason
+#     and is itself reviewable in the PR.
+#
+# Placeholders resolved at run time:
+#   {feature_dir}  specs/<NNN-name>          (from --feature or the current git branch)
+#   {prd_dir}      docs/requirements/<slug>  (from {feature_dir}/trace.yaml or --prd)
+apiVersion: ekit.policy/v1
+kind: GatePolicy
+metadata:
+  name: enterprise-generic
+  version: 0.1.0
+
+spec:
+  defaults:
+    severity: error
+    runner: local          # local | ci-only | both  (reserved for MVP2 cloud runners)
+
+  gates:
+    # ------------------------------------------------------------------ BRD -> PRD
+    - id: intake
+      stage: brd->prd
+      description: BRD normalized, PRD written, every business requirement traced or explicitly out of scope.
+      context: prd
+      checks:
+        - id: INTAKE-FILES
+          type: files.exist
+          with: { paths: ["{prd_dir}/brd.md", "{prd_dir}/prd.md", "{prd_dir}/open-questions.yaml"] }
+        - id: INTAKE-BR-IDS
+          type: ids.present
+          with: { file: "{prd_dir}/brd.md", pattern: "BR-\\d{3}", min: 1 }
+        - id: INTAKE-AC-IDS
+          type: ids.unique
+          with: { file: "{prd_dir}/prd.md", pattern: "AC-\\d{3}", definition_regex: "^\\s*[-*|]?\\s*\\**(AC-\\d{3})" }
+        - id: INTAKE-BR-COVERED
+          type: trace.br_covered
+          with: { brd: "{prd_dir}/brd.md", prd: "{prd_dir}/prd.md" }
+        - id: INTAKE-QUESTIONS-VALID
+          type: questions.valid
+          with: { file: "{prd_dir}/open-questions.yaml" }
+
+    # ------------------------------------------------------------------ ready to specify
+    - id: ready
+      stage: prd->spec
+      description: No open blocking question touches this PRD (or the feature's acceptance criteria).
+      context: prd
+      checks:
+        - id: READY-NO-BLOCKING
+          type: questions.no_open_blocking
+          with: { file: "{prd_dir}/open-questions.yaml" }
+        - id: READY-NO-PRD-TBD
+          type: text.absent
+          with: { file: "{prd_dir}/prd.md", patterns: ["\\[TBD", "\\[NEEDS CLARIFICATION"] }
+
+    # ------------------------------------------------------------------ spec quality
+    - id: spec
+      stage: spec->plan
+      description: Spec is traced to PRD acceptance criteria and has no unresolved markers.
+      context: feature
+      checks:
+        - id: SPEC-TRACE-FILE
+          type: trace.valid
+          with: { trace: "{feature_dir}/trace.yaml" }
+        - id: SPEC-AC-COVERED
+          type: trace.acs_in_file
+          with: { trace: "{feature_dir}/trace.yaml", file: "{feature_dir}/spec.md" }
+        - id: SPEC-NO-CLARIFY
+          type: text.absent
+          with: { file: "{feature_dir}/spec.md", patterns: ["\\[NEEDS CLARIFICATION"] }
+        - id: SPEC-DATA-CLASS
+          type: text.present
+          severity: warn
+          with: { file: "{feature_dir}/spec.md", patterns: ["Classification"] }
+
+    # ------------------------------------------------------------------ plan vs baseline
+    - id: plan
+      stage: plan->tasks
+      description: Every applicable feature-scope NFR is Addressed, N/A or Waived (with ADR) in plan.md.
+      context: feature
+      checks:
+        - id: PLAN-FILE
+          type: files.exist
+          with: { paths: ["{feature_dir}/plan.md"] }
+        - id: PLAN-NFR-CONFORMANCE
+          type: nfr.conformance
+          with: { file: "{feature_dir}/plan.md", scope: feature }
+        - id: PLAN-NO-CLARIFY
+          type: text.absent
+          with: { file: "{feature_dir}/plan.md", patterns: ["\\[NEEDS CLARIFICATION"] }
+
+    # ------------------------------------------------------------------ landing zone
+    - id: baseline
+      stage: landing-zone
+      description: Platform-scope NFRs are satisfied once for the repository and the stack skeleton exists.
+      context: project
+      checks:
+        - id: BASE-CONFORMANCE
+          type: nfr.conformance
+          with: { file: "docs/engineering/baseline-conformance.md", scope: platform }
+        - id: BASE-SKELETON
+          type: profile.required_paths
+          with: {}
+        - id: BASE-ENV
+          type: profile.environment     # ENV-01: pinned runtime, isolated env, git-ignored, untracked
+          with: {}
+        - id: BASE-ADR-DIR
+          type: files.exist
+          with: { paths: ["docs/adr"] }
+        - id: BASE-LINT
+          type: profile.command
+          severity: warn          # becomes error once the skeleton is generated
+          with: { command: lint }
+
+    # ------------------------------------------------------------------ Gherkin
+    - id: scenarios
+      stage: spec->gherkin
+      description: Every acceptance criterion has >=1 Gherkin scenario with unique @SCN tag.
+      context: feature
+      checks:
+        - id: GHERKIN-PARSE
+          type: gherkin.valid
+          with: { dir: "{feature_dir}/features" }
+        - id: GHERKIN-SCN-UNIQUE
+          type: gherkin.scn_unique
+          with: { dir: "specs", tag_pattern: "SCN-\\d{3}-\\d{2}" }
+        - id: GHERKIN-AC-COVERED
+          type: gherkin.ac_covered
+          with: { dir: "{feature_dir}/features", trace: "{feature_dir}/trace.yaml" }
+
+    # ------------------------------------------------------------------ TDD red
+    - id: red
+      stage: gherkin->failing-tests
+      description: Acceptance suite runs; every scenario of this feature is bound and FAILS. Records a ledger entry.
+      context: feature
+      checks:
+        - id: RED-RUN
+          type: bdd.run
+          with: { expect: red, dir: "{feature_dir}/features", record: true }
+
+    # ------------------------------------------------------------------ red recorded (no test run)
+    - id: red-recorded
+      stage: before-implement
+      description: A red ledger entry exists for every scenario of this feature (cheap check used before coding).
+      context: feature
+      checks:
+        - id: REDREC-LEDGER
+          type: ledger.red_first
+          with: { dir: "{feature_dir}/features" }
+
+    # ------------------------------------------------------------------ TDD green
+    - id: green
+      stage: failing-tests->code
+      description: Every scenario of this feature passes, was red first, and quality commands pass.
+      context: feature
+      checks:
+        - id: GREEN-RED-FIRST
+          type: ledger.red_first
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-RUN
+          type: bdd.run
+          with: { expect: green, dir: "{feature_dir}/features", record: true }
+        - id: GREEN-ENV
+          type: profile.environment
+          with: {}
+        - id: GREEN-UNIT
+          type: profile.command
+          with: { command: unit }
+        - id: GREEN-LINT
+          type: profile.command
+          with: { command: lint }
+        - id: GREEN-COVERAGE
+          type: profile.command
+          with: { command: coverage }
+        - id: GREEN-SCA
+          type: profile.command
+          severity: warn
+          with: { command: sca }
+        - id: GREEN-TASKS-DONE
+          type: tasks.all_done
+          severity: warn
+          with: { file: "{feature_dir}/tasks.md" }

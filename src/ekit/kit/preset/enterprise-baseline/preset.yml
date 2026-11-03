@@ -1,0 +1,65 @@
+schema_version: "1.0"
+
+preset:
+  id: "enterprise-baseline"
+  name: "Enterprise Engineering Baseline"
+  version: "0.1.0"
+  description: "Enterprise constitution, traceability + NFR sections in spec/plan, mandatory TDD tasks, and ekit gates wrapped around specify/plan/tasks/implement."
+  author: "enterprise-sdd-kit"
+  repository: "https://example.invalid/enterprise-sdd-kit"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=1.0.0"
+
+provides:
+  templates:
+    # ---- document templates
+    - type: "template"
+      name: "constitution-template"
+      file: "templates/constitution-template.md"
+      description: "Enterprise constitution with fixed non-negotiable principles"
+      replaces: "constitution-template"
+    - type: "template"
+      name: "spec-template"
+      file: "templates/spec-addendum.md"
+      description: "Adds traceability, data classification and business NFR sections"
+      strategy: "append"
+    - type: "template"
+      name: "plan-template"
+      file: "templates/plan-addendum.md"
+      description: "Adds stack profile and Engineering Baseline Conformance table"
+      strategy: "append"
+    - type: "template"
+      name: "tasks-template"
+      file: "templates/tasks-addendum.md"
+      description: "Makes tests mandatory and orders Gherkin -> red -> implement -> green"
+      strategy: "append"
+
+    # ---- command wrappers (core prompt kept via {CORE_TEMPLATE})
+    - type: "command"
+      name: "speckit.specify"
+      file: "commands/speckit.specify.md"
+      description: "Gate ready before, trace.yaml + gate spec after"
+      strategy: "wrap"
+    - type: "command"
+      name: "speckit.plan"
+      file: "commands/speckit.plan.md"
+      description: "Gate spec before, NFR conformance + gate plan after"
+      strategy: "wrap"
+    - type: "command"
+      name: "speckit.tasks"
+      file: "commands/speckit.tasks.md"
+      description: "Gate plan + scenarios before; TDD task ordering"
+      strategy: "wrap"
+    - type: "command"
+      name: "speckit.implement"
+      file: "commands/speckit.implement.md"
+      description: "Gate red before writing code; gate green to finish"
+      strategy: "wrap"
+
+tags:
+  - "enterprise"
+  - "nfr"
+  - "tdd"
+  - "governance"

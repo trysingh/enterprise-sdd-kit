@@ -1,0 +1,98 @@
+apiVersion: ekit/v1
+kind: Profile
+metadata:
+  id: backend/springboot
+  role: backend
+  description: Java 21 + Spring Boot 3.x, Maven wrapper, JUnit 5 + Cucumber-JVM
+
+runtime:
+  language: java
+  version: "21"
+  build: maven (wrapper committed)
+
+environment:
+  kind: maven-wrapper            # Maven version pinned by the wrapper; dependencies in the user's ~/.m2 cache
+  dir: target
+  marker: null
+  pin_file: .mvn/wrapper/maven-wrapper.properties
+  gitignore: ["target/", "reports/"]
+
+toolchain:
+  - "spring-boot-starter-web, -validation, -security, -oauth2-resource-server, -actuator"
+  - "spring-boot-starter-data-jpa, flyway-core"            # DATA-01
+  - "springdoc-openapi-starter-webmvc-ui"                  # API-01
+  - "micrometer-tracing-bridge-otel, micrometer-registry-prometheus"   # OBS-04
+  - "logstash-logback-encoder"                             # OBS-01
+  - "junit-jupiter, cucumber-java, cucumber-spring, cucumber-junit-platform-engine, junit-platform-suite"
+  - "jacoco-maven-plugin (80% line), spotless (google-java-format), spotbugs, checkstyle"
+  - "org.owasp dependency-check-maven, gitleaks"
+
+layout:          # relative to the stack's backend root
+  source: src/main/java
+  unit_tests: src/test/java
+  acceptance_tests: src/test/java/**/acceptance   # Cucumber glue; features read from specs/
+  required_paths:
+    - pom.xml
+    - mvnw
+    - mvnw.cmd
+    - .mvn/wrapper/maven-wrapper.properties
+    - src/main/resources/application.yml
+    - src/main/resources/logback-spring.xml
+    - src/test/resources/junit-platform.properties
+    - Dockerfile
+    - .gitignore
+
+# {mvnw} resolves to mvnw.cmd on Windows and ./mvnw on POSIX (falls back to mvn on PATH).
+commands:
+  install:    ["{mvnw}", "-B", "-q", "dependency:go-offline"]
+  lint:       ["{mvnw}", "-B", "-q", "spotless:check", "checkstyle:check"]
+  format:     ["{mvnw}", "-B", "-q", "spotless:check"]
+  typecheck:  ["{mvnw}", "-B", "-q", "compile", "spotbugs:check"]
+  unit:       ["{mvnw}", "-B", "-q", "test", "-Dgroups=unit"]
+  acceptance: ["{mvnw}", "-B", "-q", "test", "-Dtest=AcceptanceSuite", "-Dsurefire.failIfNoSpecifiedTests=false"]
+  coverage:   ["{mvnw}", "-B", "-q", "verify"]          # jacoco:check bound to verify, minimum 0.80
+  sca:        ["{mvnw}", "-B", "-q", "org.owasp:dependency-check-maven:check", "-DfailBuildOnCVSS=7"]
+
+bdd:
+  framework: cucumber-jvm
+  report: target/cucumber-reports/cucumber-backend.json
+  binding: >-
+    src/test/resources/junit-platform.properties sets
+    `cucumber.features=specs` (or ../specs when the backend root is backend/),
+    `cucumber.plugin=json:target/cucumber-reports/cucumber-backend.json`,
+    `cucumber.glue=<base package>.acceptance`. A JUnit Platform Suite class named
+    AcceptanceSuite selects the cucumber engine. Feature files are never copied.
+
+controls:
+  SEC-01: "spring-boot-starter-oauth2-resource-server with JWT issuer-uri from env."
+  SEC-02: "@PreAuthorize on service methods; SecurityFilterChain denies by default (anyRequest().authenticated())."
+  SEC-03: "Jakarta Bean Validation on request records (@Valid, @NotBlank, @Size, ...)."
+  SEC-04: "Config via env / Spring Cloud config; no secrets in application.yml; gitleaks pre-commit."
+  SEC-05: "OWASP dependency-check fails on CVSS >= 7."
+  SEC-06: "Spring Security headers() config (HSTS, CSP, frame-options); CorsConfigurationSource with explicit origins."
+  SEC-08: "CsrfTokenRequestAttributeHandler for cookie sessions; disabled only for pure bearer-token APIs (documented)."
+  API-01: "springdoc-openapi at /v3/api-docs; contract snapshot test."
+  API-02: "@RestControllerAdvice returning ProblemDetail (RFC 9457) with `code` property."
+  API-03: "Controllers under /api/v1."
+  OBS-01: "logstash-logback-encoder JSON; MDC masking for PII."
+  OBS-02: "Micrometer tracing propagates traceparent; correlation id in MDC and response header."
+  OBS-03: "Actuator /actuator/health/liveness and /readiness probes enabled."
+  OBS-04: "Micrometer + OTLP exporter configured via env."
+  OBS-05: "AuditService publishing domain events persisted to an append-only audit table (same transaction)."
+  REL-01: "RestClient/WebClient with connect/read timeouts; Hikari connectionTimeout."
+  REL-02: "Resilience4j retry + circuit breaker per external dependency."
+  REL-03: "server.shutdown=graceful, spring.lifecycle.timeout-per-shutdown-phase=20s."
+  DATA-01: "Flyway migrations under db/migration; Testcontainers in integration tests."
+  QA-03: "JaCoCo check rule LINE COVEREDRATIO >= 0.80."
+  QA-04: "Spotless + Checkstyle + SpotBugs."
+  CFG-01: "@ConfigurationProperties records with @Validated; fail fast on startup."
+  OPS-01: "Multi-stage Dockerfile (eclipse-temurin:21-jre), layered jar, non-root user."
+  ENV-01: "Maven wrapper pins the Maven version; maven-enforcer-plugin requireJavaVersion [21,22) and dependencyConvergence; no global Maven assumed; target/ git-ignored."
+
+agent_rules: |
+  - Java 21: records for DTOs, sealed interfaces where useful, no Lombok unless already present.
+  - Packages by feature: <base>.<feature>.{api,application,domain,infrastructure}. Controllers hold no business logic.
+  - Constructor injection only. No field @Autowired.
+  - Errors: domain exceptions mapped to ProblemDetail in a single @RestControllerAdvice.
+  - Acceptance tests: Cucumber glue in <base>.acceptance with @CucumberContextConfiguration + @SpringBootTest(webEnvironment=RANDOM_PORT); features read from specs/ via junit-platform.properties.
+  - Always run the Maven wrapper ({mvnw}); never assume a global Maven.

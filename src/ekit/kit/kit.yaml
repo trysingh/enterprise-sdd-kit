@@ -1,0 +1,45 @@
+# Enterprise SDD Kit manifest.
+# This file is the single index of everything the kit installs into a project.
+# Adding a stack = add a profile folder under profiles/ and one entry under `stacks:`.
+apiVersion: ekit/v1
+kind: Kit
+metadata:
+  name: enterprise-sdd-kit
+  version: 0.1.2          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
+  description: >-
+    BRD > PRD > SDD > TDD landing zone for GitHub Spec Kit + OpenCode with a
+    generic enterprise engineering baseline and locally enforced gates.
+
+requires:
+  speckit: ">=1.0.0"
+  python: ">=3.11"
+
+components:
+  extension: extension/esdlc               # new commands: brd, questions, baseline, gherkin, red
+  preset: preset/enterprise-baseline       # template appends + command wraps (gates)
+  nfr_catalog: baseline/nfr-catalog.yaml   # generic NFRs (regulatory overlays come in MVP2)
+  policy: policy/gates.policy.yaml         # gate definitions (portable to CI)
+  opencode: opencode                        # AGENTS.md block + agents
+
+# A stack is a backend profile + a frontend profile.
+# `roots` says where each profile's code lives; profile commands run from that root.
+stacks:
+  fastapi-jinja:
+    description: FastAPI backend, server-rendered Jinja2 templates (single deployable)
+    profiles: [backend/fastapi, frontend/jinja]
+    roots: {backend: ".", frontend: "."}
+  fastapi-react:
+    description: FastAPI JSON API + React (Vite, TypeScript) SPA
+    profiles: [backend/fastapi, frontend/react]
+    roots: {backend: "backend", frontend: "frontend"}
+  springboot-vanilla:
+    description: Spring Boot backend, plain HTML/CSS/vanilla JS as static resources (single deployable)
+    profiles: [backend/springboot, frontend/vanilla]
+    roots: {backend: ".", frontend: "."}
+  springboot-react:
+    description: Spring Boot JSON API + React (Vite, TypeScript) SPA
+    profiles: [backend/springboot, frontend/react]
+    roots: {backend: "backend", frontend: "frontend"}
+
+# Overlays are additive NFR packs (e.g. regulatory). Empty in MVP1 by design.
+overlays: {}

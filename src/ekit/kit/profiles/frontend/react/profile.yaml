@@ -1,0 +1,83 @@
+apiVersion: ekit/v1
+kind: Profile
+metadata:
+  id: frontend/react
+  role: frontend
+  description: React 18+ with Vite and TypeScript (strict); Vitest unit tests; Cucumber-js + Playwright acceptance
+
+runtime:
+  language: typescript
+  version: node 20 LTS+
+  package_manager: npm
+
+environment:
+  kind: node-modules
+  dir: node_modules
+  marker: .package-lock.json   # written by npm inside node_modules
+  pin_file: .nvmrc             # Node major, e.g. "20"; also set "engines" in package.json
+  gitignore: ["node_modules/", "dist/", "coverage/", "reports/"]
+
+toolchain:
+  - "react, react-dom, react-router"
+  - "vite, typescript (strict)"
+  - "eslint (typescript-eslint, eslint-plugin-jsx-a11y, eslint-plugin-react-hooks), prettier"
+  - "vitest, @testing-library/react"
+  - "@cucumber/cucumber, playwright, @axe-core/playwright"
+  - "zod for runtime validation of API responses and forms"
+
+layout:          # relative to the stack's frontend root
+  source: src
+  unit_tests: src (colocated *.test.tsx)
+  acceptance_tests: acceptance   # cucumber-js step definitions; features read from ../specs
+  required_paths:
+    - package.json
+    - package-lock.json
+    - .nvmrc
+    - tsconfig.json
+    - vite.config.ts
+    - eslint.config.js
+    - cucumber.js
+    - acceptance/support/world.ts
+    - src/main.tsx
+    - src/api/client.ts
+
+# npm scripts are the contract; the landing-zone task creates them in package.json.
+commands:
+  install:    ["npm", "ci"]
+  lint:       ["npm", "run", "lint"]
+  format:     ["npm", "run", "format:check"]
+  typecheck:  ["npm", "run", "typecheck"]
+  unit:       ["npm", "run", "test:unit"]
+  acceptance: ["npm", "run", "test:acceptance"]   # cucumber-js --format json:reports/cucumber-frontend.json
+  coverage:   ["npm", "run", "test:coverage"]     # vitest --coverage with thresholds 80
+  sca:        ["npm", "audit", "--audit-level=high"]
+
+bdd:
+  framework: cucumber-js
+  report: reports/cucumber-frontend.json
+  binding: >-
+    cucumber.js config sets `paths: ['../specs/**/features/*.feature']`,
+    `tags: '@ui'` and `format: ['json:reports/cucumber-frontend.json']`.
+    Only scenarios tagged @ui run here; API scenarios run in the backend suite.
+
+controls:
+  SEC-01: "OIDC Authorization Code + PKCE (oidc-client-ts); tokens in memory, never localStorage."
+  SEC-03: "zod schemas on forms and on every API response."
+  SEC-06: "CSP delivered by the serving tier; no inline scripts; Vite build without eval."
+  SEC-07: "No dangerouslySetInnerHTML (eslint `react/no-danger` = error)."
+  SEC-08: "Backend-issued CSRF header on mutating fetches when cookie auth is used."
+  OBS-02: "api/client.ts sends traceparent / X-Correlation-ID and surfaces it in error UI."
+  UX-01: "eslint-plugin-jsx-a11y + axe checks in @ui scenarios."
+  UX-02: "react-intl (or i18next); no literal user-facing strings in components."
+  PERF-02: "Vite build size budget (initial JS < 200 KB gzip) checked in build."
+  QA-03: "vitest coverage thresholds 80."
+  QA-04: "eslint + prettier + tsc --noEmit."
+  ENV-01: "Local node_modules installed only with `npm ci` from package-lock.json; `.nvmrc` + package.json `engines` pin Node 20; `engine-strict=true` in .npmrc; never `npm install -g` project tools; node_modules git-ignored."
+  OPS-01: "Multi-stage build to static assets served by nginx-unprivileged or the backend."
+
+agent_rules: |
+  - Environment (ENV-01): install with `npm ci` only; add packages with `npm install --save-exact` and commit package-lock.json; never global installs.
+  - TypeScript strict; no `any` without a comment. Function components and hooks only.
+  - All HTTP goes through `src/api/client.ts` (timeouts, correlation id, problem+json parsing). Components never call fetch directly.
+  - Validate every API response with zod before use.
+  - Acceptance scenarios that drive the browser are tagged @ui and implemented in acceptance/steps with Playwright; keep selectors role/label based (accessibility first).

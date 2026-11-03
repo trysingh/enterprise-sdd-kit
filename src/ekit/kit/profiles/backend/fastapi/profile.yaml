@@ -1,0 +1,101 @@
+apiVersion: ekit/v1
+kind: Profile
+metadata:
+  id: backend/fastapi
+  role: backend
+  description: Python 3.12 + FastAPI, uv-managed, pytest + pytest-bdd
+
+runtime:
+  language: python
+  version: "3.12"
+  package_manager: uv
+
+# ENV-01: where the isolated environment lives and how to verify it (paths relative to the profile root).
+environment:
+  kind: python-venv          # created and used by uv; no manual `python -m venv` / activate needed
+  dir: .venv
+  marker: pyvenv.cfg         # proves the folder is a real virtual environment
+  pin_file: .python-version  # e.g. "3.12"; uv reads it when creating .venv
+  gitignore: [".venv/", "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".coverage", "reports/"]
+
+toolchain:   # pinned in pyproject/uv.lock by the landing-zone task, listed here for the agent
+  - "fastapi, uvicorn[standard]"
+  - "pydantic v2, pydantic-settings"          # CFG-01 typed settings
+  - "sqlalchemy 2.x, alembic"                 # DATA-01
+  - "structlog"                               # OBS-01
+  - "opentelemetry-instrumentation-fastapi"   # OBS-04
+  - "httpx"                                   # outbound client with timeouts (REL-01) + TestClient
+  - "pytest, pytest-bdd, pytest-cov"          # QA-01..03
+  - "ruff, mypy"                              # QA-04
+  - "pip-audit, bandit, gitleaks"             # SEC-04/05
+
+layout:          # relative to the stack's backend root
+  source: src/app
+  unit_tests: tests/unit
+  acceptance_tests: tests/acceptance      # pytest-bdd step definitions; .feature files stay in specs/
+  required_paths:
+    - pyproject.toml
+    - uv.lock
+    - .python-version
+    - src/app/main.py
+    - src/app/core/settings.py
+    - src/app/core/logging.py
+    - src/app/core/errors.py
+    - src/app/api/health.py
+    - tests/acceptance/conftest.py
+    - Dockerfile
+    - .gitignore
+
+# Every command is an argv list (no shell) so it runs the same on Windows and POSIX.
+# Exit code 0 = pass. `report` is the Cucumber-JSON file the acceptance run writes.
+commands:
+  install:    ["uv", "sync", "--locked", "--all-extras"]
+  lint:       ["uv", "run", "--locked", "ruff", "check", "."]
+  format:     ["uv", "run", "--locked", "ruff", "format", "--check", "."]
+  typecheck:  ["uv", "run", "--locked", "mypy", "src"]
+  unit:       ["uv", "run", "--locked", "pytest", "tests/unit", "-q"]
+  acceptance: ["uv", "run", "--locked", "pytest", "tests/acceptance", "-q", "--cucumberjson=reports/cucumber-backend.json"]
+  coverage:   ["uv", "run", "--locked", "pytest", "tests", "-q", "--cov=src/app", "--cov-fail-under=80"]
+  sca:        ["uv", "run", "--locked", "pip-audit"]
+
+bdd:
+  framework: pytest-bdd
+  report: reports/cucumber-backend.json
+  binding: >-
+    One test module per feature file under tests/acceptance/, using
+    `scenarios("<relative path to specs/<feature>/features/x.feature>")`.
+    Feature files are never copied; they are read from specs/.
+
+controls:   # NFR id -> how this stack satisfies it
+  SEC-01: "Authlib / fastapi-oidc dependency validating JWT from the enterprise IdP; `Depends(current_user)` on routers."
+  SEC-02: "Permission dependency per route (`Depends(require(\"loan:approve\"))`); default router dependency denies."
+  SEC-03: "Pydantic v2 request models with constrained types; `extra=\"forbid\"`."
+  SEC-04: "pydantic-settings reads env / secret files; `.env` git-ignored; gitleaks pre-commit."
+  SEC-05: "uv.lock committed; `pip-audit` in sca command."
+  ENV-01: "uv-managed `.venv` at the backend root created from uv.lock (`uv sync --locked`); `.python-version` pins 3.12; every command runs via `uv run --locked`, never the global interpreter; `.venv/` git-ignored; `UV_PROJECT_ENVIRONMENT` must not point outside the repo."
+  SEC-06: "Starlette middleware setting security headers; `CORSMiddleware` with explicit origins."
+  SEC-08: "Double-submit CSRF token middleware for cookie sessions (server-rendered stacks)."
+  API-01: "FastAPI OpenAPI at /api/v1/openapi.json; snapshot test on schema."
+  API-02: "Global exception handlers returning `application/problem+json` (RFC 9457) with `code`."
+  API-03: "Routers mounted under /api/v1."
+  OBS-01: "structlog JSON renderer; PII redaction processor."
+  OBS-02: "Middleware reading/creating `traceparent` + `X-Correlation-ID`, bound into structlog contextvars."
+  OBS-03: "/health/live and /health/ready routes."
+  OBS-04: "opentelemetry-instrumentation-fastapi; exporter via OTEL_* env."
+  OBS-05: "Audit service writing append-only audit records inside the same transaction."
+  REL-01: "Shared httpx.AsyncClient with `Timeout(connect=2, read=5)`; SQLAlchemy pool timeouts."
+  REL-03: "uvicorn `--timeout-graceful-shutdown 20`; lifespan closes pools."
+  DATA-01: "Alembic migrations; test fixture runs `alembic upgrade head`."
+  QA-03: "pytest-cov with --cov-fail-under=80."
+  QA-04: "ruff (lint+format) and mypy --strict on src."
+  CFG-01: "`Settings(BaseSettings)` instantiated at startup; missing values fail fast."
+  OPS-01: "Multi-stage Dockerfile on python:3.12-slim, `USER 10001`."
+
+agent_rules: |
+  - Python 3.12, type hints everywhere, mypy --strict clean.
+  - Environment (ENV-01): the only environment is the project-local `.venv` managed by uv. Add dependencies with `uv add` / `uv add --dev`, run anything with `uv run` or `ekit run`. Never `pip install`, never install into the global/system Python or `--user`, never commit `.venv/`.
+  - Layering: api (routers, request/response models) -> services (use cases) -> domain (pure) -> adapters (db, http). Routers hold no business logic.
+  - All settings via `app.core.settings.Settings`; never read os.environ elsewhere.
+  - Errors: raise domain exceptions; translate to RFC 9457 in `app.core.errors` only.
+  - Logging: `structlog.get_logger()`; never log request bodies, tokens or PII.
+  - Acceptance tests: pytest-bdd step modules in tests/acceptance; load feature files from specs/ with relative paths; use TestClient/httpx, not a live server.

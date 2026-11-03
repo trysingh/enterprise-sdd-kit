@@ -1,0 +1,309 @@
+# Generic enterprise engineering baseline (MVP1).
+#
+# Fields
+#   id          stable identifier, referenced from plan.md / baseline-conformance.md
+#   scope       platform = satisfied once in the landing zone (docs/engineering/baseline-conformance.md)
+#               feature  = re-assessed in every feature plan.md ("Engineering Baseline Conformance")
+#   applies_to  backend | frontend | all
+#   level       mandatory (gate fails if unaddressed) | recommended (gate warns)
+#   requirement what must be true (stack-neutral)
+#   verify      how a reviewer or a gate proves it
+#
+# Stack-specific HOW lives in profiles/<kind>/<name>/profile.yaml under `controls:`.
+apiVersion: ekit/v1
+kind: NfrCatalog
+metadata:
+  name: generic-enterprise
+  version: 0.1.0
+
+statuses:            # allowed values in conformance tables
+  - Addressed        # implemented or planned in this feature/landing zone, with evidence
+  - N/A              # does not apply; justification required
+  - Waived           # applies but consciously deferred; justification + ADR/ticket reference required
+
+nfrs:
+  # ---------------- Security ----------------
+  - id: SEC-01
+    title: Authentication via central identity provider
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: All non-public endpoints and pages require authentication through OIDC/OAuth2 against the enterprise IdP; no local password stores.
+    verify: Security config reviewed; unauthenticated request to a protected route returns 401/redirect in an acceptance scenario.
+  - id: SEC-02
+    title: Authorization enforced server-side
+    scope: feature
+    applies_to: backend
+    level: mandatory
+    requirement: Every operation declares the role/permission it needs and the server enforces it (deny by default). Client-side hiding is never the control.
+    verify: At least one negative (forbidden) scenario per protected operation.
+  - id: SEC-03
+    title: Input validation at the boundary
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: All external input is validated against an explicit schema (type, length, range, format) before use; reject, do not sanitize-and-continue.
+    verify: Schema/DTO validation present; invalid-input scenario returns a 4xx problem response.
+  - id: SEC-04
+    title: Secrets never in source
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Secrets come from environment or a secret manager; repository contains no credentials; secret scanning runs locally and in CI.
+    verify: gitleaks (or equivalent) clean; .env files git-ignored.
+  - id: SEC-05
+    title: Dependency and vulnerability scanning
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Dependencies are pinned via lockfile and scanned for known vulnerabilities; build fails on critical/high without a recorded waiver.
+    verify: SCA command in profile passes.
+  - id: SEC-06
+    title: HTTP security headers and CORS
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Responses set HSTS, X-Content-Type-Options, frame-ancestors/X-Frame-Options, Referrer-Policy and a restrictive Content-Security-Policy; CORS allow-list is explicit (no wildcard with credentials).
+    verify: Acceptance or integration test asserts headers on a representative route.
+  - id: SEC-07
+    title: Output encoding and XSS prevention
+    scope: feature
+    applies_to: frontend
+    level: mandatory
+    requirement: All dynamic content is context-encoded (template autoescape / framework binding); raw HTML injection APIs are banned unless reviewed.
+    verify: Lint rule or grep check for innerHTML / dangerouslySetInnerHTML / |safe without review note.
+  - id: SEC-08
+    title: CSRF protection for cookie-based sessions
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: State-changing requests authenticated by cookies carry a CSRF token or use SameSite=strict plus origin checks.
+    verify: Scenario showing a state-changing request without token is rejected.
+
+  # ---------------- API & contracts ----------------
+  - id: API-01
+    title: Machine-readable API contract
+    scope: feature
+    applies_to: backend
+    level: mandatory
+    requirement: Every HTTP endpoint is described in OpenAPI 3.x generated from or validated against code; contract changes are reviewed.
+    verify: OpenAPI document builds; new endpoints appear in it.
+  - id: API-02
+    title: Standard error model
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Errors use RFC 9457 Problem Details with a stable error code; no stack traces or internals leak to clients.
+    verify: Error scenario asserts problem+json shape.
+  - id: API-03
+    title: Versioning and backward compatibility
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Public APIs are versioned (path or header); breaking changes require a new version and a deprecation note.
+    verify: Route prefix/version policy documented in baseline-conformance.md.
+  - id: API-04
+    title: Pagination and bounded responses
+    scope: feature
+    applies_to: backend
+    level: recommended
+    requirement: Collection endpoints paginate with an enforced max page size.
+    verify: Scenario requesting oversize page is capped or rejected.
+  - id: API-05
+    title: Idempotency for retried writes
+    scope: feature
+    applies_to: backend
+    level: recommended
+    requirement: Create/payment-like operations accept an idempotency key or are naturally idempotent.
+    verify: Scenario repeating the same request yields one effect.
+
+  # ---------------- Observability ----------------
+  - id: OBS-01
+    title: Structured logging
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Logs are structured JSON with timestamp, level, service, correlation id; no PII/secrets in logs.
+    verify: Logging config present; log sample reviewed.
+  - id: OBS-02
+    title: Correlation / trace propagation
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Incoming requests get or propagate a correlation id (W3C traceparent); it is returned in responses and present in every log line.
+    verify: Test asserts correlation id echoed in response header.
+  - id: OBS-03
+    title: Health and readiness endpoints
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Liveness and readiness endpoints exist; readiness checks critical dependencies.
+    verify: Acceptance scenario for /health (or actuator) returns UP.
+  - id: OBS-04
+    title: Metrics and tracing (OpenTelemetry)
+    scope: platform
+    applies_to: backend
+    level: recommended
+    requirement: RED metrics (rate, errors, duration) per endpoint and distributed tracing via OpenTelemetry, exporter configurable by env.
+    verify: Instrumentation configured; exporter disabled-by-default locally.
+  - id: OBS-05
+    title: Audit trail for business state changes
+    scope: feature
+    applies_to: backend
+    level: mandatory
+    requirement: Every create/update/delete of business data records who, what, when, before/after (or diff) and correlation id in an append-only audit store/log.
+    verify: Scenario asserts an audit event for each state-changing operation.
+
+  # ---------------- Reliability ----------------
+  - id: REL-01
+    title: Timeouts on all outbound calls
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Every outbound HTTP/DB/queue call has an explicit timeout; no unbounded waits.
+    verify: Client configuration reviewed; default timeouts set centrally.
+  - id: REL-02
+    title: Retries with backoff and circuit breaking
+    scope: feature
+    applies_to: backend
+    level: recommended
+    requirement: Retries only on idempotent operations, with exponential backoff and jitter; circuit breaker for flaky dependencies.
+    verify: Resilience policy documented per dependency in plan.md.
+  - id: REL-03
+    title: Graceful shutdown
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Service drains in-flight requests on SIGTERM within a bounded period.
+    verify: Server config reviewed.
+
+  # ---------------- Data ----------------
+  - id: DATA-01
+    title: Versioned schema migrations
+    scope: platform
+    applies_to: backend
+    level: mandatory
+    requirement: Database schema changes ship as versioned, forward-only migrations applied automatically and tested.
+    verify: Migration tool configured; migrations run in test setup.
+  - id: DATA-02
+    title: Data classification and PII handling
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: Each new data element is classified (public/internal/confidential/restricted); PII is minimized, masked in logs and UI where not needed.
+    verify: Key Entities in spec.md carry a classification column.
+  - id: DATA-03
+    title: Transactions and consistency boundaries
+    scope: feature
+    applies_to: backend
+    level: recommended
+    requirement: Multi-step writes define their transactional boundary and failure behaviour.
+    verify: Plan documents boundaries for each write path.
+
+  # ---------------- Performance ----------------
+  - id: PERF-01
+    title: Explicit latency and throughput budgets
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: Each user-facing operation states a p95 latency budget and expected volume; budgets are traceable to PRD success criteria.
+    verify: Budgets present in spec Success Criteria / plan Performance Goals.
+  - id: PERF-02
+    title: Frontend performance budget
+    scope: platform
+    applies_to: frontend
+    level: recommended
+    requirement: Initial load JS/CSS budget and Core Web Vitals targets defined.
+    verify: Budget documented; bundle size check in build (SPA).
+
+  # ---------------- Quality & testing ----------------
+  - id: QA-01
+    title: Acceptance tests from Gherkin (BDD)
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: Every acceptance criterion has at least one Gherkin scenario, automated and run in the build.
+    verify: Gate `scenarios` and gate `green`.
+  - id: QA-02
+    title: Test-first (red before green)
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: Scenarios and unit tests are committed and observed failing before implementation.
+    verify: Gate `red` ledger entry precedes gate `green`.
+  - id: QA-03
+    title: Coverage floor
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Line coverage of new/changed production code >= 80% (branch coverage tracked).
+    verify: Coverage command in profile enforces threshold.
+  - id: QA-04
+    title: Lint, format and static analysis
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Formatter and linter run clean; static analysis/type checking enabled.
+    verify: Profile lint/typecheck commands pass.
+
+  # ---------------- Runtime environment ----------------
+  - id: ENV-01
+    title: Isolated, pinned, reproducible runtime environment
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: >-
+      Dependencies are installed only into a project-local, isolated environment (Python virtual
+      environment, local node_modules, wrapper-managed build tool), never into the global/system
+      interpreter or user site-packages. The runtime version is pinned in a committed file, the
+      environment is created from the lockfile alone, and the environment folder is git-ignored
+      and never committed.
+    verify: Gate check profile.environment (pin file present, env folder git-ignored and untracked, interpreter version matches pin).
+
+  # ---------------- Configuration & delivery ----------------
+  - id: CFG-01
+    title: Twelve-factor configuration
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Environment-specific configuration comes from environment variables / config service with typed validation at startup; one build artifact for all environments.
+    verify: Typed settings object; app fails fast on missing config.
+  - id: OPS-01
+    title: Reproducible build and container image
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Lockfiles committed; a multi-stage container build produces a non-root, minimal image.
+    verify: Dockerfile present; container runs as non-root.
+  - id: OPS-02
+    title: Pipeline-ready commands
+    scope: platform
+    applies_to: all
+    level: mandatory
+    requirement: Build, test, lint, scan are single non-interactive commands so any CI system can run them unchanged.
+    verify: Profile commands run headless.
+
+  # ---------------- UX ----------------
+  - id: UX-01
+    title: Accessibility WCAG 2.2 AA
+    scope: feature
+    applies_to: frontend
+    level: mandatory
+    requirement: New UI meets WCAG 2.2 AA (semantic HTML, labels, keyboard navigation, contrast, focus management).
+    verify: Automated a11y check (axe) in acceptance tests for new pages.
+  - id: UX-02
+    title: Internationalization-ready
+    scope: platform
+    applies_to: frontend
+    level: recommended
+    requirement: User-facing strings externalized; dates, numbers and currency formatted by locale.
+    verify: No hard-coded user strings in new components.
+
+  # ---------------- Documentation ----------------
+  - id: DOC-01
+    title: Architecture decisions recorded
+    scope: feature
+    applies_to: all
+    level: mandatory
+    requirement: Significant technical decisions and every waiver are recorded as ADRs under docs/adr/.
+    verify: Each Waived entry references an ADR id.

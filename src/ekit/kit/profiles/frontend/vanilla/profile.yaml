@@ -1,0 +1,44 @@
+apiVersion: ekit/v1
+kind: Profile
+metadata:
+  id: frontend/vanilla
+  role: frontend
+  description: Plain HTML/CSS + vanilla ES modules served by Spring Boot as static resources (no Node toolchain)
+
+runtime:
+  language: javascript (ES2022 modules, no bundler)
+  shares_runtime_with: backend/springboot
+
+toolchain:
+  - "static resources under src/main/resources/static"
+  - "native ES modules, fetch API, <template> elements"
+  - "Playwright for Java driven from Cucumber steps tagged @ui"
+  - "axe-core injected via Playwright for UX-01"
+
+layout:
+  source: src/main/resources/static
+  required_paths:
+    - src/main/resources/static/index.html
+    - src/main/resources/static/js/api.js
+    - src/main/resources/static/css/app.css
+
+commands: {}   # tested and built by backend/springboot (same root)
+
+bdd:
+  framework: inherit
+  report: null
+
+controls:
+  SEC-06: "CSP from Spring Security forbids inline script/style; all JS in /js/*.js modules."
+  SEC-07: "DOM built with textContent / <template> cloning; innerHTML banned (grep check in review)."
+  SEC-08: "js/api.js reads the XSRF-TOKEN cookie and sends X-XSRF-TOKEN on mutating requests."
+  OBS-02: "js/api.js propagates X-Correlation-ID and shows it in error messages."
+  UX-01: "Semantic HTML, labelled controls, focus management; axe check in @ui scenarios."
+  UX-02: "Strings loaded from /i18n/<locale>.json."
+  PERF-02: "No framework; total JS per page < 50 KB."
+
+agent_rules: |
+  - No frameworks, no bundler, no npm. ES modules only, loaded with <script type="module" src>.
+  - All HTTP goes through js/api.js (timeout via AbortController, correlation id, problem+json handling).
+  - Never use innerHTML/outerHTML/insertAdjacentHTML with dynamic data; use textContent and <template>.
+  - Browser-level scenarios are tagged @ui and implemented with Playwright for Java inside the Cucumber glue.
