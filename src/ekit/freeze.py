@@ -30,6 +30,7 @@ ALWAYS = [".ekit/*", "opencode.json", ".opencode/*"]
 # another wrapper (`uv run ekit …`, a script) is not covered; the records they write name who acted.
 ALWAYS_BASH = [
     "ekit unfreeze*",
+    "ekit fix-red*",     # wraps unfreeze; same reason it's denied
     "ekit upgrade*",
     "ekit wave approve*",
     "ekit wave advance*",
@@ -48,6 +49,7 @@ def load_state(root: Path) -> dict[str, Any]:
     data.setdefault("managed", [])
     data.setdefault("managed_bash", [])
     data.setdefault("frozen", {})
+    data.setdefault("narrow", {})   # feature -> source-dir deny patterns, while its tests are unfrozen
     data.setdefault("history", [])
     return data
 
@@ -56,6 +58,8 @@ def desired_patterns(state: dict[str, Any]) -> list[str]:
     pats = list(ALWAYS)
     for feature_patterns in (state.get("frozen") or {}).values():
         pats += feature_patterns
+    for narrow_patterns in (state.get("narrow") or {}).values():
+        pats += narrow_patterns
     return list(dict.fromkeys(pats))
 
 
@@ -63,6 +67,25 @@ def patterns_for(feature: str, fingerprints: dict[str, str]) -> list[str]:
     """Feature files collapse to one directory pattern (so new files are covered); test modules stay exact."""
     prefix = f"specs/{feature}/features/"
     return sorted({prefix + "*" if rel.startswith(prefix) else rel for rel in fingerprints})
+
+
+def source_dirs(project: Any) -> list[str]:
+    """Each active profile's production source dir (profile.yaml's layout.source), as a plain
+    relative directory path — the thing `ekit unfreeze` denies (as a glob) and `ekit fix-red`
+    temporarily reverts."""
+    dirs: list[str] = []
+    for prof in getattr(project, "active_profiles", None) or project.profiles:
+        src = (prof.data.get("layout") or {}).get("source")
+        if not src:
+            continue
+        base = project.rel(prof.root)
+        dirs.append(src if base in (".", "") else f"{base}/{src}")
+    return sorted(set(dirs))
+
+
+def source_patterns(project: Any) -> list[str]:
+    """`source_dirs`, as `permission.edit` deny glob patterns."""
+    return [f"{d}/**" for d in source_dirs(project)]
 
 
 def _read_config(root: Path, rules_hint: list[str]) -> dict[str, Any]:
@@ -134,6 +157,7 @@ def sync_permissions(root: Path) -> list[str]:
 def freeze_feature(root: Path, feature: str, fingerprints: dict[str, str]) -> list[str]:
     state = load_state(root)
     state["frozen"][feature] = patterns_for(feature, fingerprints)
+    state["narrow"].pop(feature, None)   # re-frozen: the narrow source-edit protection is no longer needed
     dump_yaml(state, state_path(root))
     return sync_permissions(root)
 
@@ -152,16 +176,26 @@ def _who(root: Path) -> str:
     return git(root, "config", "user.email") or git(root, "config", "user.name") or os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
 
 
-def unfreeze_feature(root: Path, feature: str, reason: str) -> list[str]:
+def unfreeze_feature(root: Path, feature: str, reason: str, *, narrow_src: list[str] | None = None) -> list[str]:
+    """Lift the test freeze. By default (narrow_src given) this also denies the feature's own
+    production source directories for as long as it stays unfrozen: the point of unfreezing is to
+    fix the test, and an agent that uses the window to implement production code instead has, in
+    practice, repeated the mistake this exists to catch. `ekit gate red` lifts the source-deny again
+    the moment it re-freezes. Pass narrow_src=None (or `--allow-src` on the CLI) to skip this."""
     if not reason.strip():
         raise EkitError("A reason is required: ekit unfreeze <feature> --reason \"...\"")
     state = load_state(root)
     if feature not in state["frozen"]:
         raise EkitError(f"{feature} is not frozen.")
     paths = state["frozen"].pop(feature)
+    if narrow_src:
+        state["narrow"][feature] = sorted(set(narrow_src))
+    else:
+        state["narrow"].pop(feature, None)
     state["history"].append({
         "action": "unfreeze", "feature": feature, "reason": reason.strip(), "by": _who(root),
         "at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(), "paths": paths,
+        "narrowed_source": state["narrow"].get(feature) or [],
     })
     dump_yaml(state, state_path(root))
     return sync_permissions(root)
@@ -185,9 +219,14 @@ def verify(root: Path) -> list[tuple[bool, str, str]]:
     brules = brules if isinstance(brules, dict) else {}
     bmissing = [pat for pat in ALWAYS_BASH if brules.get(pat) != "deny"]
     rows.append((not bmissing, "agent cannot run approval commands",
-                 "ekit unfreeze / upgrade / wave approve|advance|decline / models" if not bmissing
+                 "ekit unfreeze / fix-red / upgrade / wave approve|advance|decline / models" if not bmissing
                  else f"missing bash deny for {', '.join(bmissing)}: run `ekit sync`"))
     for feature, pats in sorted(state["frozen"].items()):
         gone = [x for x in pats if rules.get(x) != "deny"]
         rows.append((not gone, f"{feature} frozen", f"{len(pats)} rule(s)" if not gone else f"missing deny for {', '.join(gone)}: run `ekit freeze {feature}`"))
+    for feature, pats in sorted((state.get("narrow") or {}).items()):
+        gone = [x for x in pats if rules.get(x) != "deny"]
+        rows.append((not gone, f"{feature} unfrozen (source protected)",
+                     f"production source denied while fixing the test: {', '.join(pats)}" if not gone
+                     else f"missing deny for {', '.join(gone)}: run `ekit sync`"))
     return rows

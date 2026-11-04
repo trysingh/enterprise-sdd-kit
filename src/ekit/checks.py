@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -70,6 +71,27 @@ def _missing(ctx: GateContext, p: str) -> list[Finding]:
 
 
 # ------------------------------------------------------------------------- files / text
+ADR_FILE_RE = re.compile(r"^(\d{4})-.+\.md$")
+
+
+@check("adr.unique")
+def adr_unique(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """ADR numbers are unique, so `ADR-0003` in a Waived row points at exactly one decision."""
+    d = ctx.path(w.get("dir", "docs/adr"))
+    if not d.is_dir():
+        return []  # BASE-ADR-DIR reports a missing folder
+    by_num: dict[str, list[str]] = {}
+    for f in sorted(d.glob("*.md")):
+        m = ADR_FILE_RE.match(f.name)
+        if m:
+            by_num.setdefault(m.group(1), []).append(f.name)
+    taken = {int(n) for n in by_num}
+    nxt = f"{(max(taken) + 1) if taken else 1:04d}"
+    return [Finding("error", f"ADR number {n} is used by {len(names)} files ({', '.join(names)}): renumber all but one "
+                             f"(next free number: {nxt}) and update any `ADR-{n}` reference")
+            for n, names in sorted(by_num.items()) if len(names) > 1]
+
+
 @check("files.exist")
 def files_exist(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     return [
@@ -560,6 +582,51 @@ def vacuous_steps(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     return out
 
 
+@check("bdd.steps_bound")
+def steps_bound(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Every step of every scenario has a step definition visible to the module that binds it.
+    Static scan, implemented for pytest-bdd (a scenario failing at an early step hides a later
+    undefined step from RED-RUN)."""
+    from . import stepbind
+    out: list[Finding] = []
+    features = sorted(ctx.path(w["dir"]).rglob("*.feature"))
+    cache: dict[Path, Any] = {}
+    for prof in _active(ctx):
+        if not prof.runs_bdd:
+            continue
+        fw = prof.bdd.get("framework")
+        if fw != "pytest-bdd":
+            out.append(Finding("info", f"[{prof.id}] step-binding scan is not implemented for {fw}: the runner's "
+                                       "undefined-step report at red is the only check"))
+            continue
+        modules = [f for f in _test_files(prof) if f.suffix == ".py" and f.name != "conftest.py"]
+        texts = {m: m.read_text(encoding="utf-8", errors="replace") for m in modules}
+        for feat in features:
+            binders = [m for m in modules if feat.name in texts[m]]
+            if not binders:
+                continue  # RED-RUN reports scenarios that no module runs
+            steps = stepbind.feature_steps(feat.read_text(encoding="utf-8"))
+            for mod in binders:
+                defs, dynamic = stepbind.visible_definitions(mod, prof.root, cache)
+                level = "warn" if dynamic else "error"
+                seen: set[tuple[str, str]] = set()
+                for st in stepbind.unbound(steps, defs):
+                    if (st.kind, st.text) in seen:
+                        continue
+                    seen.add((st.kind, st.text))
+                    hint = stepbind.near_miss(st, defs)
+                    out.append(Finding(level, f"{_rel_posix(ctx, feat)}:{st.line} {st.keyword} \"{st.text}\" "
+                                              f"(scenario '{st.scenario}') has no step definition visible to "
+                                              f"{_rel_posix(ctx, mod)}" + (f"; {hint}" if hint else "")))
+                if dynamic and seen:
+                    out.append(Finding("info", f"{_rel_posix(ctx, mod)}: {dynamic} step pattern(s) are built at "
+                                               "runtime and cannot be checked, so unbound steps are warnings"))
+    for md_path, md in cache.items():
+        if md.error:
+            out.append(Finding("error", f"{_rel_posix(ctx, md_path)}: {md.error}"))
+    return out
+
+
 @check("ledger.tests_unchanged")
 def tests_unchanged(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     """Red tests are frozen: the .feature files and bound test modules must be byte-identical
@@ -668,6 +735,81 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
                                            f"restart OpenCode to apply; lift with `ekit unfreeze {ctx.feature_dir.name} --reason \"...\"`"))
             except EkitError as exc:
                 out.append(Finding("warn", f"could not freeze the red tests in opencode.json: {exc}"))
+    return out
+
+
+_CLEAN_RED_DEFAULT = ("AssertionError",)
+
+
+@check("bdd.clean_failure")
+def clean_failure(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """A scenario recorded as red must fail on a genuine assertion about missing behaviour — not
+    error out of broken test glue (a KeyError reading state no step set, an undefined step hidden
+    behind an earlier failure, a typo'd fixture name). pytest-bdd reports both as plain 'failed',
+    so RED-RUN alone accepts either; this reads the same report RED-RUN just wrote and rejects an
+    exception type other than the allowed ones, so a broken test can't be frozen as if it were a
+    legitimate TDD red. Static step-binding (RED-STEPS-BOUND) catches undefined steps that nothing
+    ever reaches because an earlier step fails first; this catches what actually ran and errored."""
+    allowed = set(w.get("allow") or _CLEAN_RED_DEFAULT)
+    want = _feature_scn_ids(ctx, w["dir"])
+    if not want:
+        return []
+    reports = [p.root / p.bdd["report"] for p in _active(ctx) if p.runs_bdd and p.bdd.get("report")]
+    elements = gherkin.read_cucumber_elements([r for r in reports if r.is_file()])
+    out: list[Finding] = []
+    for sid in want:
+        for el in elements.get(sid, []):
+            if gherkin._scenario_status(el) != "failed":
+                continue
+            exc = gherkin.failure_exception(el)
+            if exc and exc not in allowed:
+                out.append(Finding("error", f"{sid}: failed with {exc}, not {'/'.join(sorted(allowed))} — this "
+                                             "usually means broken test glue (a missing fixture value, an undefined "
+                                             "step hidden behind an earlier failure, a typo), not a genuine gap in "
+                                             "the implementation. Fix the test itself before freezing it as red; "
+                                             "rerun `ekit gate red` once it fails cleanly on an assertion. If this "
+                                             "really is a legitimate red failure in your style (e.g. a deliberate "
+                                             "NotImplementedError stub), add it to this check's `allow` list or use "
+                                             "an override"))
+    return out
+
+
+def _committed_with(root: Path, rel: str, sha: str) -> bool:
+    """True if some commit reachable from HEAD has `rel` with this (CRLF-normalised) sha256."""
+    revs = git(root, "rev-list", "HEAD", "--", rel)
+    for rev in (revs or "").splitlines()[:50]:
+        try:
+            blob = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=root, capture_output=True, check=True).stdout
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        if hashlib.sha256(blob.replace(b"\r\n", b"\n")).hexdigest() == sha:
+            return True
+    return False
+
+
+@check("ledger.red_committed")
+def red_committed(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """The red evidence is in git: the frozen feature files and tests, exactly as fingerprinted at red,
+    and the ledger itself. The ledger cites a commit as proof that tests came first; that proof only
+    holds if what was recorded is committed."""
+    ledger = _ledger_path(ctx)
+    if not ledger.is_file():
+        return []  # ledger.red_first reports it
+    root = ctx.project.root
+    if git(root, "rev-parse", "--is-inside-work-tree") != "true":
+        return [Finding("warn", "not a git repository: the red evidence (feature files, tests, ledger) cannot be "
+                                "verified as committed; run `git init` and commit")]
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red"]
+    fp = (reds[-1].get("fingerprints") if reds else None) or {}
+    missing = [rel for rel, sha in sorted(fp.items()) if not _committed_with(root, rel, sha)]
+    out = []
+    if missing:
+        out.append(Finding("error", f"{len(missing)} file(s) recorded at red are not committed as recorded "
+                                    f"({', '.join(missing[:5])}{' …' if len(missing) > 5 else ''}). Commit the tests, "
+                                    f"feature files and {ctx.project.rel(ledger)} right after `ekit gate red`, "
+                                    "before implementing"))
+    if not git(root, "ls-files", "--", ctx.project.rel(ledger)):
+        out.append(Finding("error", f"{ctx.project.rel(ledger)} is not committed: the ledger is the evidence"))
     return out
 
 

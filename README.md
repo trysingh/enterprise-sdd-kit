@@ -1,4 +1,4 @@
-# Enterprise SDD Kit (`ekit`) — MVP1
+# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.2.3)
 
 One command turns a new or existing repository into an enterprise landing zone for
 **GitHub Spec Kit + OpenCode**, running a deterministic
@@ -50,7 +50,7 @@ commands (no shell), `{mvnw}` → `mvnw.cmd` on Windows / `./mvnw` elsewhere, an
 |---|---|---|
 | `bundled` | `--source bundled` | trying it out; offline |
 | local folder | `--source D:\kits\enterprise-sdd-kit` | a clone of your org's kit repo |
-| git | `--source git+https://git.example.com/eng/sdd-kit.git@v0.2.0` | teams; pin a tag |
+| git | `--source git+https://git.example.com/eng/sdd-kit.git@v0.2.3` | teams; pin a tag |
 
 You can also set `EKIT_KIT_SOURCE`. Whatever the source, the kit is **copied into
 `.ekit/kit` and pinned** in `.ekit/kit.lock.yaml` (source, tag, commit, sha256). Commit both:
@@ -62,16 +62,17 @@ vendored kit; `ekit upgrade [--source …]` re-fetches, re-pins and re-applies.
 | Part | Where it lives | Pinned by | Changes when |
 |---|---|---|---|
 | **Rules**: gate policy, NFR catalogue, stack profiles, templates, agent rules | `.ekit/kit/` in the repository (committed) | `.ekit/kit.lock.yaml`: source, resolved commit, sha256 | someone runs `ekit upgrade` and commits the result |
-| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.1.5,<0.2`) | a developer reinstalls the CLI |
+| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.3,<0.3`) | a developer reinstalls the CLI |
 
 Both parts decide a gate result. Identical rules judged by two different CLI versions can disagree,
 because check logic changes between releases (0.1.1 changed how tags are read, 0.1.2 added
-`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red). So:
+`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red, 0.2.1 added
+`RED-STEPS-BOUND` and the committed-evidence checks). So:
 
 - **One CLI version per project.** `ekit init` and `ekit upgrade` record the running CLI version in the lock.
   Everyone, and CI, installs exactly that version.
-- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.1.5`; one tag then fixes both the CLI
-  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.1.5`.
+- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.3`; one tag then fixes both the CLI
+  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.3`.
 - **Mismatch is visible.** `ekit doctor` fails the row *ekit CLI matches the project pin*, `ekit status` prints a
   `!!` line, and every gate report (text, JSON and JUnit) carries a note naming both versions.
 - **CI refuses to judge with the wrong CLI.** Set `EKIT_REQUIRE_PINNED_CLI=1` in the pipeline: a gate then exits 2
@@ -116,10 +117,11 @@ question must name who decided (`answered_by`): `ekit questions import` refuses 
 - **ready**: no open/deferred blocking question; every answered blocking question names `answered_by`; no `[TBD…]` / `[NEEDS CLARIFICATION` in the PRD.
 - **spec**: `trace.yaml` valid and points at real ACs; every AC referenced in `spec.md`; no clarification markers; with an approved wave plan, every AC is in the current or an earlier wave (`SPEC-WAVE-SCOPE`).
 - **scenarios**: `.feature` files parse; each scenario has exactly one `@SCN-<feature>-nn`, unique repo-wide; every AC is tagged on ≥1 scenario.
-- **plan**: every applicable **feature-scope** NFR has a row `Addressed | N/A | Waived`; evidence/justification present; `Waived` cites an ADR (`ADR-0007` or `docs/adr/0007-….md`; a date is not an ADR reference); with an approved wave plan, `Deferred (W2)` for an NFR the plan defers until W2.
-- **baseline**: same for **platform-scope** NFRs in `baseline-conformance.md`; profile `required_paths` exist; **ENV-01** environment isolation (below); lint runs.
-- **red**: first scans the step modules (`RED-STEPS-ASSERT`, pytest-bdd): a step whose body is `pass`, `...`, a docstring or `assert True` is an error, as is an absolute path in `scenarios()`. Then runs the acceptance suite(s); every scenario of the feature appears in the Cucumber-JSON report and **fails** (a scenario that passes before implementation is an error; undefined, pending, ambiguous or **skipped** scenarios are errors, because only an observed failure proves the test can fail). Writes `.ekit/ledger/<feature>.yaml` with git HEAD and a sha256 fingerprint of the feature files and the test modules bound to them.
-- **green**: red was recorded first for every scenario (a ledger status of `failed`); the feature files and bound test modules are unchanged since red (`GREEN-TESTS-UNCHANGED`); all scenarios pass and the suites exit 0 (no regressions); unit, lint, coverage pass; SCA and unchecked tasks warn.
+- **plan**: ADR numbers unique; every applicable **feature-scope** NFR has a row `Addressed | N/A | Waived`; evidence/justification present; `Waived` cites an ADR (`ADR-0007` or `docs/adr/0007-….md`; a date is not an ADR reference); with an approved wave plan, `Deferred (W2)` for an NFR the plan defers until W2.
+- **baseline**: same for **platform-scope** NFRs in `baseline-conformance.md`; profile `required_paths` exist; **ENV-01** environment isolation (below); ADR numbers unique; lint runs. A pass is recorded in `.ekit/ledger/baseline.yaml`, which `ekit status` shows as passed, stale (conformance record, kit or active profiles changed since) or not run.
+- **red**: first scans the step modules (pytest-bdd). `RED-STEPS-ASSERT`: a step whose body is `pass`, `...`, a docstring or `assert True` is an error, as is an absolute path in `scenarios()`. `RED-STEPS-BOUND`: every step of every scenario (Background included, outlines expanded) has a definition the binding module can see, with the right keyword type; a scenario that fails at an early step would otherwise hide a later step with no definition. Then runs the acceptance suite(s); every scenario of the feature appears in the Cucumber-JSON report and **fails** (a scenario that passes before implementation is an error; undefined, pending, ambiguous or **skipped** scenarios are errors, because only an observed failure proves the test can fail). Writes `.ekit/ledger/<feature>.yaml` with git HEAD and a sha256 fingerprint of the feature files and the test modules bound to them.
+- **red-recorded** and **green**: the files fingerprinted at red, and the ledger, are committed exactly as recorded (`REDREC-COMMITTED`, `GREEN-RED-COMMITTED`).
+- **green**: red was recorded first for every scenario (a ledger status of `failed`); every step is bound (`GREEN-STEPS-BOUND`, for features recorded red before 0.2.1); the feature files and bound test modules are unchanged since red (`GREEN-TESTS-UNCHANGED`); all scenarios pass and the suites exit 0 (no regressions); unit, lint, coverage pass; SCA and unchecked tasks warn.
 
 Output formats: `--format text|json|junit` and `--out file`. JUnit is understood by GitHub
 Actions, GitLab, Azure DevOps and Jenkins without plugins, so taking a gate to CI later is one
@@ -145,16 +147,25 @@ to remove it.
 
 ## Frozen tests and step quality
 
-Red proves a test *fails*, not that it is *good*. Two deterministic guards close that gap:
+Red proves a test *fails*, not that it is *good*. Three deterministic guards close that gap:
 
 - **`RED-STEPS-ASSERT`** rejects steps that cannot fail. A `Then` whose body is `pass` lets a scenario go
   green with the wrong behaviour, because the scenario was only red for an earlier reason. A deliberate
   no-op is allowed with `# ekit: allow-empty-step <reason>` on the step, so the exception shows up in review.
   The scan is implemented for pytest-bdd; for Cucumber-JVM and cucumber-js the gate prints an info line and
   step bodies must be reviewed by hand.
+- **`RED-STEPS-BOUND`** rejects steps that have no definition the binding module can see (missing, defined
+  under another keyword type, or in a module that is not imported). Without it, a scenario that fails at an
+  early step hides a later step that can never run, and the frozen test can never pass. pytest-bdd only.
 - **`GREEN-TESTS-UNCHANGED`** compares the files recorded at red with the files now. Editing a recorded test
   to get green fails the gate. Covered: the feature's `.feature` files and the test modules that name them or
   their `@SCN-<NNN>-` ids. Not covered: shared helpers and `conftest.py`, so review changes to those.
+- **`RED-CLEAN-FAILURE`** (since 0.2.2) rejects a scenario that *errored* — a `KeyError` reading state no step
+  set, a step binding mismatch, a typo — rather than failed on a genuine assertion. pytest-bdd reports both as
+  plain `failed`, so without this check `RED-RUN` accepts either; a scenario can be frozen while its own test
+  glue is broken, and the breakage only surfaces during implementation, well after it was cheap to fix. Default
+  allow-list is `AssertionError`; add others (e.g. a deliberate `NotImplementedError` stub style) via the
+  check's `allow:` param in policy, or the usual override if it's a one-off.
 
 ### Edit protection: the agent cannot touch frozen files
 
@@ -166,11 +177,43 @@ edit, write and patch tools:
 |---|---|---|
 | `.ekit/*`, `opencode.json`, `.opencode/*` | `ekit init`, `sync`, `upgrade` | never (humans edit these outside the agent) |
 | `specs/<feature>/features/*` and the test modules bound to the feature | `ekit gate red` passes | `ekit unfreeze <feature> --reason "..."` |
+| the feature's production source dir (profile's `layout.source`) | `ekit unfreeze` (since 0.2.2; default) | `ekit gate red` re-freezing, or `ekit unfreeze … --allow-src` to skip it |
+
+The source-dir rule exists because unfreezing is for fixing the *test*: an agent that uses the window to
+implement production code instead has, in effect, repeated the mistake the freeze exists to catch. It's
+denied the moment `ekit unfreeze` runs and allowed again the moment the feature is re-frozen — `ekit status`
+and `ekit doctor` both show it while active.
 
 Since 0.2.0 ekit also owns `permission.bash` deny rules for the commands that record a person's decision:
-`ekit unfreeze`, `ekit upgrade`, `ekit wave approve|advance|decline` and `ekit models …`. The agent's shell
-tool cannot run them; it tells the user the command instead. Running them through another wrapper
-(`uv run ekit …`, a script) is not covered, and the records they write name who acted.
+`ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline` and `ekit models …`. The
+agent's shell tool cannot run them; it tells the user the command instead. Running them through another
+wrapper (`uv run ekit …`, a script) is not covered, and the records they write name who acted.
+
+### `ekit fix-red`: fixing a frozen test's own glue, in one reviewed step
+
+A frozen test can fail at green not because the implementation is wrong but because the test's own glue is —
+a step that assumed another scenario's setup already ran, a binding that doesn't match the feature text. Fixing
+that means: unfreeze, get the production code back to how it looked when this was last genuinely red (so the
+fix is proven against the same failure, not against code the test was never red against), run `ekit gate red`,
+restore the production code, then a human reviews the test diff and commits. Doing this by hand means `git
+stash` or a manual revert of files you may not fully remember editing — and `git stash` has nothing to grab once
+the implementation is already committed, which is the common case by the time a frozen-test bug surfaces.
+
+`ekit fix-red <feature> --reason "..."` automates the mechanical part only:
+
+1. Requires the feature to be frozen and its production source dir(s) (profile's `layout.source`) to be clean
+   (`git status --porcelain` empty) — it refuses rather than guess what of an uncommitted change is safe to move.
+2. Unfreezes (narrow, as above) and temporarily checks the production source back to the commit recorded as
+   this feature's last red (`.ekit/ledger/<feature>.yaml`), not via `git stash`.
+3. Runs `ekit gate red` for the feature.
+4. Restores the production source to exactly what it was before, whatever the outcome — including a file that
+   didn't exist yet at the red commit (moved aside and back, not deleted).
+
+It never commits anything: a clean result still means a human reviews the test diff and runs
+`git add -A && git commit -m "test(...): red (...)"` themselves, same as every other red/green step in this
+pipeline. It's denied to the agent's shell tool for the same reason `ekit unfreeze` is — this removes toil for
+the person who already has to make the call, not a new thing an agent can decide to do on its own. If red still
+isn't clean, the source is restored anyway and the message says to keep fixing the test and run it again.
 
 State is `.ekit/freeze.yaml` (commit it): the frozen paths and a history of every unfreeze with reason, who and
 when. Your own rules and settings in `opencode.json` are kept; ekit rewrites only the rules it owns, after the
@@ -190,8 +233,8 @@ reviewed exception without going back to red is an entry in `.ekit/policy.overri
 
 pytest-bdd quirk worth knowing: a scenario whose *first* step has no step definition is left out of
 pytest-bdd's Cucumber JSON, and one with a later undefined step is recorded as passed, although pytest fails
-the test either way. The gate messages say so; the pytest output (`StepDefinitionNotFoundError`) is the
-source of truth.
+the test either way. Since 0.2.1, `RED-STEPS-BOUND` finds such steps statically before the run; the pytest
+output (`StepDefinitionNotFoundError`) remains the source of truth.
 
 ## Environment isolation (ENV-01)
 
@@ -257,14 +300,14 @@ ran (the OpenCode UI can still switch models). A temporary downgrade goes in `ov
 ## Useful commands
 
 ```
-ekit status                 # PRDs, open questions, per-feature gate state
+ekit status                 # PRDs, open questions, landing zone, per-feature gate state, waves, model routing
 ekit context [--nfr feature|platform] [--json]   # what agents read: stack, rules, NFRs + how
 ekit run lint|unit|acceptance|coverage|sca       # same command on every OS
 ekit gate all
 ekit sync                   # re-apply pinned kit (after editing nothing but wanting a refresh)
 ekit freeze [feature]        # re-apply edit protection for a red feature (gate red does it)
 ekit unfreeze [feature] --reason "..."   # lift it, audited in .ekit/freeze.yaml
-ekit upgrade --source git+https://…@v0.3.0
+ekit upgrade --source git+https://…@v0.2.3
 EKIT_REQUIRE_PINNED_CLI=1 ekit gate green   # CI: refuse to judge with a CLI other than the pinned one
 ekit wave [status|init|validate|scope FEAT-xx]   # optional waves (approve / advance / decline: a person)
 ekit models [show|setup|off]                     # optional model tiers (a person)
@@ -304,9 +347,12 @@ docs/design/              design notes per release
 | 0.1.1 | 0.1.2 | Cucumber JSON reader accepts tags with and without `@` (pytest-bdd writes them without). |
 | 0.1.2 | 0.1.3 | `RED-STEPS-ASSERT`, `GREEN-TESTS-UNCHANGED`, clearer undefined-step messages, feature lookup in command text, agent rules to extend (never rewrite) the landing zone and not edit frozen tests. The kit declares `requires.ekit >= 0.1.2`; an older CLI refuses it. |
 | 0.1.3 | 0.1.4 | Edit protection: ekit-managed `permission.edit` deny rules in `opencode.json`, `ekit freeze` / `unfreeze`, `frozen` column in `status`, doctor check. Requires `ekit >= 0.1.3`. |
+| 0.1.4 | 0.1.5 | CLI version pinning: `kit.lock.yaml` records the CLI version (`ekit.version`); `doctor` fails on a mismatch, `status` and every gate report show it, `EKIT_REQUIRE_PINNED_CLI=1` makes gates refuse to run with another CLI; red/green ledger entries record `ekit_version`; `requires.ekit` accepts ranges (`>=0.1.4,<0.2`, also `>`, `<=`, `==`) and the kit declares an upper bound. Requires `ekit >=0.1.4,<0.2`. |
 | 0.1.5 | 0.1.6 | Governance fixes found by validating the quiz against the code: `RED-RUN` rejects skipped scenarios and `ledger.red_first` counts only `failed` entries; `Waived` needs a real ADR reference (a date such as `2026-12` no longer satisfies it); overrides need `reason`, `approved_by` and `expires`; a blocking question answered without `answered_by` fails `ready` (and `intake`) and is refused by `questions import`. Requires `ekit >=0.1.5,<0.2`. |
 | 0.2.0 | 0.2.0 | Optional **waves** (`ekit wave …`, `.ekit/waves.yaml`, AC-level scope, `SPEC-WAVE-SCOPE`, `Deferred (Wn)`, non-deferrable NFRs, inactive profiles skipped) and optional **model tiers** (`ekit models …`, red on flagship by default, frontmatter injection on sync, ledger records the configured model). Approval commands denied to the agent's shell tool. Both features are off unless configured. Requires `ekit >=0.2.0,<0.3`. Design: `docs/design/0.2.0-waves-and-model-tiers.md`. |
-| 0.1.4 | 0.1.5 | CLI version pinning: `kit.lock.yaml` records the CLI version (`ekit.version`); `doctor` fails on a mismatch, `status` and every gate report show it, `EKIT_REQUIRE_PINNED_CLI=1` makes gates refuse to run with another CLI; red/green ledger entries record `ekit_version`; `requires.ekit` accepts ranges (`>=0.1.4,<0.2`, also `>`, `<=`, `==`) and the kit declares an upper bound. Requires `ekit >=0.1.4,<0.2`. |
+| 0.2.1 | 0.2.1 | Found on the first real project: `RED-STEPS-BOUND` / `GREEN-STEPS-BOUND` (pytest-bdd: every step has a visible definition of the right keyword type), `REDREC-COMMITTED` / `GREEN-RED-COMMITTED` (red evidence committed as recorded), `BASE-ADR-UNIQUE` / `PLAN-ADR-UNIQUE`, baseline pass recorded and shown in `ekit status` (with `000-*` smoke scenarios listed apart from features) and `ekit doctor`. Requires `ekit >=0.2.1,<0.3`. |
+| 0.2.2 | 0.2.2 | Found fixing a 0.2.1-flagged bug on the same project: `RED-CLEAN-FAILURE` rejects a scenario that errored (broken test glue) rather than failed on an assertion, even though pytest-bdd reports both as `failed`; `ekit unfreeze` now denies the feature's production source dir by default while its tests are unfrozen (`--allow-src` to skip), re-allowed the moment it's re-frozen, so fixing a frozen test can't turn into unrelated implementation work. Command text and the AGENTS.md block both say step functions must be self-contained and that an unfreeze-fix touches only the named test file. Requires `ekit >=0.2.2,<0.3`. Design: `docs/design/0.2.2-clean-red-and-narrow-unfreeze.md`. |
+| 0.2.3 | 0.2.3 | Found applying a 0.2.2-flagged fix by hand on the same project (a patch applied outside the agent's edit tool, caught correctly by `GREEN-TESTS-UNCHANGED`, then fixed with a manual unfreeze/revert/red/restore cycle): `ekit fix-red <feature> --reason "..."` automates that cycle — unfreeze, revert the feature's production source to its last-red commit (not `git stash`, which has nothing to grab once that source is already committed), run `ekit gate red`, restore the source either way — without ever committing. Denied to the agent's shell tool, same as `ekit unfreeze`. Requires `ekit >=0.2.3,<0.3`. Design: `docs/design/0.2.3-fix-red.md`. |
 
 Upgrade: `uv tool install --reinstall ./enterprise-sdd-kit` (or `--force git+…@<tag>`), then in each project
 `ekit upgrade` and commit `.ekit/`. Projects vendored before 0.1.4 have no CLI pin: `ekit doctor` says so until
@@ -320,6 +366,20 @@ after `ekit upgrade` and fix what it reports in the same reviewed change.
 Moving to 0.2.0 changes nothing for projects that use neither waves nor model tiers, except that
 `opencode.json` gains the `permission.bash` deny rules (restart OpenCode after `ekit upgrade`).
 
+Moving to 0.2.1 can turn results red on purpose: a feature whose red tests have an unbound step fails green
+(take it back to red: `ekit unfreeze … --reason`, stubs, add the definition, `ekit gate red`); red evidence that
+was never committed fails `red-recorded` and `green` until it is; duplicate ADR numbers fail `baseline` and `plan`.
+Run `ekit gate baseline` once after upgrading so `ekit status` has a landing-zone record.
+
+Moving to 0.2.2 can turn an existing red entry invalid: if a scenario was frozen while actually erroring (not
+failing on an assertion), `RED-CLEAN-FAILURE` now rejects it on the next `ekit gate red` for that feature — take
+it back to red the usual way and fix the test glue, not the production code. Nothing changes for a feature
+whose red already failed cleanly.
+
+Moving to 0.2.3 changes nothing by itself — `ekit fix-red` is a new, opt-in command (and a new
+`permission.bash` deny rule for it; restart OpenCode after `ekit upgrade`). Use it instead of the manual
+unfreeze/revert/red/restore cycle the next time a frozen test's own glue, not the implementation, is wrong.
+
 ## Status of MVP1
 
 Verified against Spec Kit 1.2.7 (source build) on Linux: greenfield `init`, brownfield `adopt`,
@@ -330,6 +390,10 @@ FastAPI + pytest-bdd (which found the tag-format and empty-step gaps fixed in 0.
 exercised: Windows hosts, the Spring Boot and React toolchains, and agent output quality on smaller models,
 which can loop or rewrite baseline code; the gates catch it, they do not prevent it.
 
-0.2.0 (waves, model tiers) is covered by unit and CLI tests but has not yet been run against a live Spec Kit +
-OpenCode install: confirm on the first project that Spec Kit writes its OpenCode commands to `.opencode/commands/`
+0.2.0 (waves, model tiers), 0.2.1 (step binding, committed evidence, landing-zone status), 0.2.2
+(clean-failure check, narrow unfreeze) and 0.2.3 (`ekit fix-red`) are covered by unit and CLI tests. 0.2.1's gap
+(a scenario frozen while actually erroring, not failing cleanly), 0.2.2's fix for it, and 0.2.3's automation of
+the fix-it cycle it created were all found debugging the same real project on 0.2.0, which is still the only
+version run end-to-end against a live Spec Kit + OpenCode install; 0.2.2 and 0.2.3 themselves have not. Confirm
+on the first project you upgrade that Spec Kit writes its OpenCode commands to `.opencode/commands/`
 (or `.opencode/command/`) and that `ekit models show` lists them without "(no file under .opencode/)".

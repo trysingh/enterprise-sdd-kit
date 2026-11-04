@@ -181,7 +181,12 @@ def run_gate(
             cr.findings = [Finding("error", str(exc))]
         results.append(cr)
 
-    return GateResult(gate_id, gate.get("description", ""), mapping, results), notes
+    res = GateResult(gate_id, gate.get("description", ""), mapping, results)
+    if gate.get("record") and res.passed:
+        from . import landing
+        if landing.record(project, str(gate["record"])):
+            notes.append(f"recorded the passing result in {gate['record']} (commit it; `ekit status` reads it)")
+    return res, notes
 
 
 # ---------------------------------------------------------------------------- reporting

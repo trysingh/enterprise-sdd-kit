@@ -51,13 +51,34 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix_red(args: argparse.Namespace) -> int:
+    from . import fixred
+    project = Project.load()
+    require_pinned_cli(project)
+    feature = project.resolve_feature(args.feature).name
+    clean, report = fixred.fix_red(project, feature, args.reason)
+    print(report)
+    if not clean:
+        print(f"\n{feature}: still not a clean red (see above) — production source has been restored either way. "
+              f"Fix the test further and run `ekit fix-red {feature} --reason \"...\"` again.")
+        return 1
+    print(f"\n{feature}: clean red, re-frozen, production source restored. Review the test diff, then:\n"
+          f"  git add -A && git commit -m \"test({feature.split('-', 1)[0]}): red (...)\"\n"
+          f"then `ekit gate green --feature {feature}`.")
+    return 0
+
+
 def cmd_unfreeze(args: argparse.Namespace) -> int:
     from . import freeze
     project = Project.load()
     feature = project.resolve_feature(args.feature).name
-    freeze.unfreeze_feature(project.root, feature, args.reason)
-    print(f"{feature} unfrozen (recorded in .ekit/freeze.yaml). Restart OpenCode to apply.\n"
-          f"Fix the tests, then run `ekit gate red` while the code is still red: it records new fingerprints and freezes again.")
+    narrow = None if args.allow_src else freeze.source_patterns(project)
+    freeze.unfreeze_feature(project.root, feature, args.reason, narrow_src=narrow)
+    print(f"{feature} unfrozen (recorded in .ekit/freeze.yaml). Restart OpenCode to apply.")
+    if narrow:
+        print(f"Production source is also denied until this re-freezes: {', '.join(narrow)}. "
+              "The point of unfreezing is to fix the test, not to implement; pass --allow-src to skip this.")
+    print("Fix the tests, then run `ekit gate red` while the code is still red: it records new fingerprints and freezes again.")
     return 0
 
 
@@ -222,8 +243,15 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(line)
     from . import freeze
     frozen = set(freeze.load_state(project.root)["frozen"])
+    from . import landing
+    lz_state, lz_detail = landing.status(project)
+    print(f"\nLanding zone\n  baseline: {lz_state} — {lz_detail}")
+    smoke = landing.smoke_summary(project)
+    if smoke:
+        print(f"  {smoke}")
     print("\nFeatures                       spec  scen  plan  red   green frozen")
-    for f in project.feature_dirs():
+    features = [f for f in project.feature_dirs() if not f.name.startswith("000-")]
+    for f in features:
         cells = []
         for gid in ("spec", "scenarios", "plan"):
             try:
@@ -235,7 +263,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         phases = {e.get("phase") for e in ((yaml.safe_load(ledger.read_text(encoding="utf-8")) or {}).get("entries") or [])} if ledger.is_file() else set()
         cells += ["ok" if "red" in phases else "--", "ok" if "green" in phases else "--"]
         print(f"  {f.name:<28} " + "    ".join(f"{c:<2}" for c in cells) + f"    {'yes' if f.name in frozen else '--'}")
-    if not project.feature_dirs():
+    if not features:
         print("  (none yet)")
     return 0
 
@@ -436,7 +464,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("unfreeze", help="lift the edit protection of a feature's red tests (needs a reason; audited)")
     sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
     sp.add_argument("--reason", required=True, help="why the red tests must change; stored in .ekit/freeze.yaml")
+    sp.add_argument("--allow-src", action="store_true",
+                    help="don't also deny production source edits while unfrozen (default: deny them, since the point is to fix the test)")
     sp.set_defaults(fn=cmd_unfreeze)
+
+    sp = sub.add_parser("fix-red", help="unfreeze, temporarily revert the feature's source to its last-red state, "
+                                         "run gate red, restore the source — for a frozen test whose own glue is wrong")
+    sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
+    sp.add_argument("--reason", required=True, help="why the test needs fixing; stored in .ekit/freeze.yaml")
+    sp.set_defaults(fn=cmd_fix_red)
 
     sp = sub.add_parser("stacks", help="list stacks offered by a kit source")
     sp.add_argument("--source")

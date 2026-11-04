@@ -375,6 +375,9 @@ def doctor(project: Project | None) -> int:
     row(DEFAULT_INTEGRATION in installed_integrations(project.root), "opencode integration")
     row((project.root / ".specify" / "extensions" / "esdlc").is_dir(), "esdlc extension")
     row(_preset_installed(project), "enterprise-baseline preset")
+    from . import landing
+    lz_state, lz_detail = landing.status(project)
+    row(lz_state != "stale", "landing zone (ekit gate baseline)", lz_detail)
     say("\nWaves and model routing (optional)")
     from . import models, waves
     mode = waves.project_mode(project.root)

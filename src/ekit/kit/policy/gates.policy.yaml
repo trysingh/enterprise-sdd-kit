@@ -98,12 +98,16 @@ spec:
         - id: PLAN-NO-CLARIFY
           type: text.absent
           with: { file: "{feature_dir}/plan.md", patterns: ["\\[NEEDS CLARIFICATION"] }
+        - id: PLAN-ADR-UNIQUE
+          type: adr.unique
+          with: { dir: docs/adr }
 
     # ------------------------------------------------------------------ landing zone
     - id: baseline
       stage: landing-zone
       description: Platform-scope NFRs are satisfied once for the repository and the stack skeleton exists.
       context: project
+      record: .ekit/ledger/baseline.yaml   # a passing run is recorded; `ekit status` reads it
       checks:
         - id: BASE-CONFORMANCE
           type: nfr.conformance
@@ -117,6 +121,9 @@ spec:
         - id: BASE-ADR-DIR
           type: files.exist
           with: { paths: ["docs/adr"] }
+        - id: BASE-ADR-UNIQUE
+          type: adr.unique
+          with: { dir: docs/adr }
         - id: BASE-LINT
           type: profile.command
           severity: warn          # becomes error once the skeleton is generated
@@ -147,19 +154,28 @@ spec:
         - id: RED-STEPS-ASSERT
           type: bdd.vacuous_steps
           with: { dir: "{feature_dir}/features" }
+        - id: RED-STEPS-BOUND
+          type: bdd.steps_bound        # every step has a definition the binding module can see
+          with: { dir: "{feature_dir}/features" }
         - id: RED-RUN
           type: bdd.run
           with: { expect: red, dir: "{feature_dir}/features", record: true }
+        - id: RED-CLEAN-FAILURE
+          type: bdd.clean_failure      # a scenario must fail on an assertion, not error out of broken test glue
+          with: { dir: "{feature_dir}/features" }
 
     # ------------------------------------------------------------------ red recorded (no test run)
     - id: red-recorded
       stage: before-implement
-      description: A red ledger entry exists for every scenario of this feature (cheap check used before coding).
+      description: A red ledger entry exists for every scenario of this feature and is committed (cheap check used before coding).
       context: feature
       checks:
         - id: REDREC-LEDGER
           type: ledger.red_first
           with: { dir: "{feature_dir}/features" }
+        - id: REDREC-COMMITTED
+          type: ledger.red_committed   # the red evidence (tests, feature files, ledger) is committed as recorded
+          with: {}
 
     # ------------------------------------------------------------------ TDD green
     - id: green
@@ -170,8 +186,14 @@ spec:
         - id: GREEN-RED-FIRST
           type: ledger.red_first
           with: { dir: "{feature_dir}/features" }
+        - id: GREEN-RED-COMMITTED
+          type: ledger.red_committed
+          with: {}
         - id: GREEN-TESTS-UNCHANGED
           type: ledger.tests_unchanged
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-STEPS-BOUND
+          type: bdd.steps_bound        # also catches features recorded red before ekit 0.2.1
           with: { dir: "{feature_dir}/features" }
         - id: GREEN-RUN
           type: bdd.run

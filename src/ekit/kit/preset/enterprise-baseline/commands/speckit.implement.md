@@ -11,6 +11,8 @@ strategy: wrap
 1. Check that a red ledger entry exists for this feature: `ekit gate red-recorded`.
    **If there is none, STOP** and run `__SPECKIT_COMMAND_ESDLC_RED__` first. Never write
    production behaviour before the tests that prove it have been seen failing.
+   If it fails only because the red evidence is not committed (`REDREC-COMMITTED`), STOP and ask the user to
+   commit the feature files, tests and ledger first; do not commit or edit them yourself.
 2. Run `ekit context` and follow the profile `agent_rules` and `controls` while coding.
 3. Do not edit `.feature` files or the acceptance tests recorded at red, and do not weaken assertions to get green.
    `ekit gate green` fails on any change (`GREEN-TESTS-UNCHANGED`). If a scenario or test is wrong,

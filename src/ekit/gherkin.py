@@ -137,3 +137,43 @@ def read_cucumber_reports(paths: list[Path]) -> dict[str, list[str]]:
 def aggregate(statuses: list[str]) -> str:
     """Worst status wins: one failing example fails the scenario."""
     return max(statuses, key=lambda s: STATUS_ORDER.index(s) if s in STATUS_ORDER else 0)
+
+
+def read_cucumber_elements(paths: list[Path]) -> dict[str, list[dict]]:
+    """Return {SCN-id: [element, ...]} merged across reports, same matching as read_cucumber_reports
+    but keeping the raw element so a caller can look past the status string (e.g. at error_message)."""
+    result: dict[str, list[dict]] = {}
+    for p in paths:
+        if not p.is_file():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8") or "[]")
+        except json.JSONDecodeError:
+            continue
+        for feature in data if isinstance(data, list) else []:
+            ftags = [_at(t.get("name", "")) for t in feature.get("tags", [])]
+            for el in feature.get("elements", []):
+                if el.get("type") == "background" or el.get("keyword", "").strip().lower() == "background":
+                    continue
+                tags = ftags + [_at(t.get("name", "")) for t in el.get("tags", [])]
+                for scn in scn_tags(tags, r"SCN-\d{3}-\d{2}"):
+                    result.setdefault(scn, []).append(el)
+    return result
+
+
+_EXC_NAME_RE = re.compile(r"\b([A-Za-z_][\w.]*(?:Error|Exception))\s*:")
+
+
+def failure_exception(element: dict) -> str | None:
+    """Best-effort exception class name from the first failed step's error_message. A traceback
+    (pytest's own, or the plain 'SomeError: message' line pytest-bdd puts in the cucumber-json
+    error_message) ends with 'SomeError: ...'; this takes the last such name in the text (the
+    innermost, most specific exception), or None if nothing looks like a Python exception line
+    (another language/framework)."""
+    for step in element.get("steps", []):
+        res = step.get("result") or {}
+        if res.get("status") != "failed":
+            continue
+        names = _EXC_NAME_RE.findall(res.get("error_message") or "")
+        return names[-1].rsplit(".", 1)[-1] if names else None
+    return None

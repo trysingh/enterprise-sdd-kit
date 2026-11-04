@@ -4,10 +4,11 @@ This guide covers running the Enterprise SDD Kit (`ekit`) on Windows when GitHub
 (`specify`) and OpenCode already work on the machine. It also explains how to measure the
 kit against plain Spec Kit.
 
-> **Status:** ekit 0.2.0 / kit 0.2.0. The MVP1 pipeline was verified on Linux against Spec Kit 1.2.7. It is written
-> to be OS-agnostic, but this is its first Windows run, so treat the first project as the pilot. The optional
-> waves and model tiers added in 0.2.0 are covered by unit and CLI tests but have not yet run against a live
-> Spec Kit + OpenCode install (see *I* and *J*).
+> **Status:** ekit 0.2.3 / kit 0.2.3. The MVP1 pipeline was verified on Linux against Spec Kit 1.2.7, and has since
+> run on Windows with FastAPI + pytest-bdd against a real project (that run is what found the gaps 0.2.1, 0.2.2
+> and 0.2.3 fix — see *6. Troubleshooting*). The optional waves and model tiers added in 0.2.0, 0.2.2's
+> clean-failure check and narrow unfreeze, and 0.2.3's `ekit fix-red`, are covered by unit and CLI tests but have
+> not yet run against a live Spec Kit + OpenCode install (see *I* and *J*).
 
 ---
 
@@ -79,7 +80,7 @@ kit against plain Spec Kit.
 | Part | Where it lives | Pinned by | Changes when |
 |---|---|---|---|
 | **Rules**: gate policy, NFR catalogue, stack profiles, templates, agent rules | `.ekit/kit/` in the repository (committed) | `.ekit/kit.lock.yaml`: source, resolved commit, sha256 | someone runs `ekit upgrade` and commits the result |
-| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.0,<0.3`) | a developer reinstalls the CLI |
+| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.1,<0.3`) | a developer reinstalls the CLI |
 | **Project guidance**: ratified constitution, `AGENTS.md` outside the ekit block | `.specify\memory\constitution.md`, `AGENTS.md` (committed) | not pinned or hashed; reviewed in pull requests | anyone edits them (see *H*) |
 | **Personal guidance** | `$HOME\.config\opencode\AGENTS.md` (your machine only) | not pinned; never in the repository | you edit it |
 | **Wave plan** (optional) | `.ekit/waves.yaml` (approved, committed); proposal in `docs/planning/waves.proposed.yaml` | `approved_by` and history inside the file; only `ekit wave approve` / `advance` write it | a person approves or advances (see *I*) |
@@ -87,14 +88,15 @@ kit against plain Spec Kit.
 
 Both of the first two parts decide a gate result. Identical rules judged by two different CLI versions can disagree,
 because check logic changes between releases (0.1.1 changed how tags are read, 0.1.2 added
-`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red). Project and
+`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red, 0.2.1 added
+`RED-STEPS-BOUND` and the committed-evidence checks). Project and
 personal guidance shape what the agent tries; they never change what a gate accepts. The wave plan does change
 what a gate accepts (scope, deferrals, active profiles), which is why only a person can approve it. So:
 
 - **One CLI version per project.** `ekit init` and `ekit upgrade` record the running CLI version in the lock.
   Everyone, and CI, installs exactly that version.
-- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.0`; one tag then fixes both the CLI
-  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.0`.
+- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.1`; one tag then fixes both the CLI
+  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.1`.
 - **Mismatch is visible.** `ekit doctor` fails the row *ekit CLI matches the project pin*, `ekit status` prints a
   `!!` line, and every gate report (text, JSON and JUnit) carries a note naming both versions.
 - **CI refuses to judge with the wrong CLI.** Set `EKIT_REQUIRE_PINNED_CLI=1` in the pipeline: a gate then exits 2
@@ -150,9 +152,9 @@ ekit doctor                 # outside a project it checks tools only
 Optional, to make your team's kit the default source for every `init`:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("EKIT_KIT_SOURCE", "git+https://git.example.com/eng/sdd-kit.git@v0.2.0", "User")
+[Environment]::SetEnvironmentVariable("EKIT_KIT_SOURCE", "git+https://git.example.com/eng/sdd-kit.git@v0.2.1", "User")
 # use the same tag for the CLI itself:
-uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.0
+uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.1
 ```
 
 Optional, personal rules for the agent in every project on this machine (see *H*):
@@ -166,7 +168,7 @@ notepad "$HOME\.config\opencode\AGENTS.md"
 
 ```powershell
 # Reinstall the CLI from the new tag (preferred) or the updated folder
-uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.0
+uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.1
 # or: uv tool install --force C:\tools\enterprise-sdd-kit
 ekit --version
 ```
@@ -178,7 +180,7 @@ longer matches their pin. Move a project deliberately, as one reviewed change:
 cd C:\work\loan-origination
 ekit upgrade                      # re-vendors the kit and re-pins the CLI version in kit.lock.yaml
 ekit doctor
-git add .ekit; git commit -m "chore: ekit 0.2.0 / kit 0.2.0"
+git add .ekit; git commit -m "chore: ekit 0.2.1 / kit 0.2.1"
 ```
 
 `ekit upgrade` rewrites only the ekit block in `AGENTS.md` and never touches a ratified constitution, so project
@@ -195,7 +197,7 @@ the previous CLI for projects that have not moved: `uv tool install --force git+
 cd C:\work
 ekit init loan-origination --stack fastapi-react
 #   asks for the kit source (bundled / local folder / git). Skip the prompt with:
-#   --source bundled   |   --source C:\tools\enterprise-sdd-kit   |   --source git+https://…@v0.2.0
+#   --source bundled   |   --source C:\tools\enterprise-sdd-kit   |   --source git+https://…@v0.2.1
 cd loan-origination
 ekit doctor
 git add -A; git commit -m "chore: enterprise SDD landing zone (ekit)"
@@ -229,9 +231,13 @@ Back in PowerShell:
 ```powershell
 git diff .specify/memory/constitution.md   # only placeholders, version/dates and IX+ should have changed
 ekit run install               # creates .venv / node_modules from the lockfiles
-ekit gate baseline             # must pass before feature work
+ekit gate baseline             # must pass before feature work; records .ekit/ledger/baseline.yaml
 git add -A; git commit -m "chore: landing zone and baseline conformance"
+ekit status                    # Landing zone: baseline: passed — <date> at <commit>
 ```
+
+Run `git init` before the landing zone if the folder is not a repository yet: ekit needs git to verify
+that environment folders are ignored, and the red/green evidence is checked against commits.
 
 ### D. Once per BRD
 
@@ -288,10 +294,14 @@ for the current wave, and a later slice of the same PRD feature becomes a new fe
 | 7 | `/speckit.implement` | `red-recorded` before, `green` after |
 | — | **commit the code** (PowerShell, see below) | |
 
-The commit after step 6:
+The commit after step 6, **before** `/speckit.implement`. It must contain the feature files under `specs/`, the bound
+tests, `.ekit/ledger/`, `.ekit/freeze.yaml`, `opencode.json` and, for the first feature of a PRD,
+`docs/requirements/<slug>/`. `ekit gate red-recorded` and `ekit gate green` fail (`REDREC-COMMITTED`,
+`GREEN-RED-COMMITTED`) until the files recorded at red are committed exactly as recorded:
 
 ```powershell
 git add -A; git commit -m "test(001): red"
+git status --short             # nothing under specs/ or tests/ should be left untracked
 ```
 
 **After step 6 the red tests are frozen.** `ekit gate red` adds deny rules to `opencode.json` so the agent's edit tools cannot change that feature's `.feature` files or bound test modules (`ekit status` shows `frozen = yes`). Commit `opencode.json` and `.ekit/freeze.yaml` with the tests, then **quit and relaunch OpenCode** so the rules apply before `/speckit.implement`. If a test really is wrong, a human lifts the freeze:
@@ -302,7 +312,26 @@ ekit unfreeze 001-user-admin --reason "step wording typo, JIRA-123"   # audited 
 ekit gate red                                                         # new fingerprints, frozen again
 ```
 
+Since 0.2.2, `ekit unfreeze` also denies the feature's production source directory by default for as long as
+it stays unfrozen (not just the test files) — the point of unfreezing is to fix the test, and an agent that
+uses the window to implement production code instead has repeated the mistake the freeze exists to catch.
+`ekit gate red` lifts that source-deny again the moment it re-freezes. Pass `--allow-src` to skip this (rare —
+mainly if you genuinely want to keep implementing while you fix the test).
+
 The rules cover the agent's edit tools, not shell commands; `ekit gate green` fails if a frozen file changed anyway.
+
+**Since 0.2.3**, `ekit fix-red` automates that whole unfreeze/fix-glue cycle in one reviewed command, for the
+case where the implementation is already committed (so there's nothing for a stash to grab):
+
+```powershell
+ekit fix-red 001-user-admin --reason "step wording typo, JIRA-123"
+# unfreezes, checks the production source back to the commit recorded as this feature's last red,
+# runs `ekit gate red`, then restores the production source either way — it never commits.
+```
+
+If the report it prints still isn't clean, fix the test glue further and run it again; once it is, review the
+test diff and commit yourself, same as step 6 above. It's denied to the agent's shell tool, same as
+`ekit unfreeze` — a person decides this, not the agent.
 
 The commit after step 7:
 
@@ -342,7 +371,7 @@ ekit context --nfr feature     # see the NFRs and stack rules the agent is follo
 ```powershell
 ekit doctor                    # after changing tools, or when something behaves oddly
 ekit upgrade                   # pull a newer kit from the pinned source
-ekit upgrade --source git+https://…@v0.2.0   # switch to a different version or source
+ekit upgrade --source git+https://…@v0.2.1   # switch to a different version or source
 ekit sync                      # re-apply the pinned kit (e.g. after a Spec Kit upgrade)
 ekit freeze [feature]           # re-apply edit protection for a red feature (gate red does this)
 ekit unfreeze [feature] --reason "..."   # lift it so a wrong red test can be fixed; audited
@@ -402,7 +431,7 @@ Rules that keep this safe:
 - **Personal rules must not contradict project rules.** OpenCode combines both files; the gates still
   judge the result.
 
-**What ekit 0.2.0 does not check yet.** Principles I–VIII in the ratified constitution are protected by
+**What ekit 0.2.1 does not check yet.** Principles I–VIII in the ratified constitution are protected by
 pull-request review only. They are not covered by `kit.lock.yaml` (which hashes `.ekit\kit\` only), no gate
 compares them with the kit template, and `ekit sync` / `ekit upgrade` never rewrite a ratified constitution.
 Reviewers compare any change to I–VIII with
@@ -472,8 +501,8 @@ What the rules are:
 - **Turning it off:** `ekit wave decline` before anything is approved. Once a plan is approved, removing
   `.ekit\waves.yaml` is a reviewed change.
 
-Not in 0.2.0 yet: an agent command that drafts the proposal with a reason per feature, `ekit wave move` and a CSV
-round-trip for the product owner (0.2.1); change-impact analysis and a cross-wave regression gate (0.3.0).
+Not built yet: an agent command that drafts the proposal with a reason per feature, `ekit wave move` and a CSV
+round-trip for the product owner (planned for 0.2.2); change-impact analysis and a cross-wave regression gate (0.3.0).
 
 ### J. Optional: model tiers
 
@@ -663,7 +692,7 @@ Record one row per run in a spreadsheet (`benchmark.csv`):
 ```text
 arm,run,brd,model,ekit_cli,kit_version,features,lead_time_min,interventions,questions_raised,wrong_guesses,holdout_pass_pct,defects_after_done,nfr_met_pct,ac_traced_pct,test_first(y/n),rework_lines,coverage_pct,lint_findings,sca_high,tokens,cost
 plain,1,loan-v3,<model>,-,-,3,,,,,,,,,,,,,,,
-ekit,1,loan-v3,<model>,0.2.0,0.2.0,3,,,,,,,,,,,,,,,
+ekit,1,loan-v3,<model>,0.2.1,0.2.1,3,,,,,,,,,,,,,,,
 ```
 
 Compare the **median of each arm**. Report deltas for M1, M2, M4, M5, M6 and M10 first,
@@ -697,14 +726,21 @@ Adopt the kit as the default if, across 3+ runs, all of these hold:
 | `spec`: "… is not in the approved wave plan", or a gate note "the approved wave plan is no longer valid" | a new or changed BRD added ACs nobody has placed | place them in the proposal and approve again; approval lists the newly placed ACs |
 | `plan`/`baseline`: "Deferred (W2) needs an approved wave plan" / "cannot be deferred" / "is required now" | `Deferred` used without waves, for a non-deferrable NFR, or after its wave became current | use Addressed, N/A or Waived with an ADR; or add the deferral to the proposal and approve (not possible for non-deferrable NFRs) |
 | `ekit wave advance`: "… acceptance criteria of W1 have no green feature yet" | the wave is not finished | finish those slices, or `--carry` them to the next wave (recorded) |
-| The agent says a command was denied (`ekit wave approve`, `ekit models`, `ekit unfreeze`, `ekit upgrade`) | these record a person's decision; `opencode.json` denies them to the agent's shell tool | run the command yourself in PowerShell |
+| The agent says a command was denied (`ekit wave approve`, `ekit models`, `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`) | these record a person's decision; `opencode.json` denies them to the agent's shell tool | run the command yourself in PowerShell |
 | `ekit doctor`: "model routing … missing or outdated in …" | Spec Kit regenerated the command files (upgrade, `ekit sync` before 0.2.0) | `ekit sync`, then restart OpenCode |
 | A routed command does not start with the `[ekit] tier: …` line | OpenCode not restarted after `ekit models setup` / `ekit sync`, or the model ignored the banner | restart OpenCode; check the active model in OpenCode's UI and `ekit models` |
 | `ekit doctor`: "ekit CLI matches the project pin" fails | you run a different CLI version than the one in `.ekit/kit.lock.yaml` | install the pinned tag: `uv tool install --force git+https://…/sdd-kit.git@v<pinned>`; or, as a reviewed change for the whole team, `ekit upgrade` and commit `.ekit/` |
 | Teammates or CI get a different gate result for the same commit | different ekit CLI versions (check logic differs), or `.ekit/` changes not committed | compare `ekit --version`; `git status .ekit`; see *What is pinned, and what is not* |
 | Gate exits 2: "EKIT_REQUIRE_PINNED_CLI is set …" | CI runner installed another CLI than the pin | install the CLI tag named in the lock in the pipeline |
-| "Kit … requires ekit >=0.2.0,<0.3 … (not >=0.2.0)" | your CLI is older or newer than the kit allows | install a CLI in the allowed range (`uv tool install --force git+…@v0.2.0`), or upgrade the project to a kit that allows your CLI |
+| "Kit … requires ekit >=0.2.1,<0.3 … (not >=0.2.1)" | your CLI is older or newer than the kit allows | install a CLI in the allowed range (`uv tool install --force git+…@v0.2.1`), or upgrade the project to a kit that allows your CLI |
 | "kit.lock.yaml does not record an ekit CLI version" | project vendored by ekit < 0.1.4 | run `ekit upgrade` once with the team's CLI and commit `.ekit/` |
+| `red`/`green`: `… Then "…" (scenario '…') has no step definition visible to tests/acceptance/…` (`RED-STEPS-BOUND`, `GREEN-STEPS-BOUND`) | a step has no definition the binding module can see: missing, defined under another keyword (`@given` for a `Then` step), or in a module that is not imported | at red: add or fix the definition and re-run `ekit gate red`. At green (the test is frozen): `ekit unfreeze <feature> --reason "…"`, stash the implementation, add the definition, `ekit gate red`, commit, restore the implementation |
+| `red-recorded`/`green`: "… file(s) recorded at red are not committed as recorded" (`REDREC-COMMITTED`) | the commit after red was skipped or partial | commit the feature files, tests and `.ekit/ledger/` now; if a recorded file changed since red, restore it from the red run or go back to red |
+| `baseline`/`plan`: "ADR number 0001 is used by 2 files" (`BASE-ADR-UNIQUE`) | a new ADR reused a number | rename all but one to the next free number the message names, and update `ADR-nnnn` references in conformance tables |
+| `ekit status`: "Landing zone baseline: stale" | the conformance record, the pinned kit or (with waves) the active profiles changed since the last passing baseline | `ekit gate baseline`, then commit `.ekit/ledger/baseline.yaml` |
+| `ekit status`: "Landing zone baseline: not run" on a project whose baseline passed earlier | the pass was before ekit 0.2.1, which started recording it | run `ekit gate baseline` once and commit the record |
+| `red`: "failed with KeyError, not AssertionError" (or another exception name) (`RED-CLEAN-FAILURE`) | the scenario errored out of broken test glue (a dict key no step set, a typo'd fixture) rather than failing on a real assertion; pytest-bdd reports both as `failed`, so without this check it would freeze anyway | fix the test's step glue itself, not production code — `ekit unfreeze <feature> --reason "…"`, edit only the named test file, `ekit gate red` again until it fails cleanly on an assertion |
+| OpenCode's edit tool refuses a `src/` file while a feature is unfrozen | since 0.2.2, `ekit unfreeze` also denies the feature's production source dir by default (see *3*) | that's intentional while you're fixing the test; re-freeze with `ekit gate red` to lift it, or re-run unfreeze with `--allow-src` if you really need both at once |
 | `red`: "produced no report" | BDD runner not wired, or doesn't compile yet | run `ekit run acceptance` and read the error; the report path is in `ekit context` |
 | `red`: "PASSES before implementation" | the test doesn't check the new behaviour | strengthen the assertion. Don't change the gate |
 | `red`: "skipped — red needs the scenario to run and FAIL" | a `@skip`/`@wip` tag, a skip marker, or a tag filter in the runner config excludes the scenario | remove the skip or filter; a skipped scenario is not evidence that the test can fail |
