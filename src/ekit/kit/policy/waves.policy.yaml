@@ -1,0 +1,29 @@
+# Wave planning policy (optional feature; used only when a project has .ekit/waves.yaml).
+#
+# A wave makes the product smaller, never less safe. NFRs listed here cannot be deferred to a
+# later wave in .ekit/waves.yaml; they must be Addressed (or N/A / Waived with an ADR) from the
+# first wave on. Everything else in the NFR catalogue may be deferred with a reason and an approver,
+# and becomes required automatically once its wave is current.
+apiVersion: ekit.policy/v1
+kind: WavePolicy
+metadata:
+  name: enterprise-generic
+  version: 0.1.0
+
+non_deferrable:
+  - SEC-01   # authentication via central IdP
+  - SEC-02   # authorization enforced server-side
+  - SEC-03   # input validation at the boundary
+  - SEC-04   # secrets never in source
+  - SEC-05   # dependency and vulnerability scanning
+  - DATA-02  # data classification and PII handling
+  - ENV-01   # isolated, pinned runtime environment
+  - QA-01    # acceptance tests from Gherkin
+  - QA-02    # test-first (red before green)
+  - QA-04    # lint, format, static analysis
+  - DOC-01   # decisions recorded as ADRs
+
+# Where proposals and the approved plan live (relative to the project root).
+files:
+  proposal: docs/planning/waves.proposed.yaml
+  approved: .ekit/waves.yaml

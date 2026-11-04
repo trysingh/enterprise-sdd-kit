@@ -60,6 +60,11 @@ def _read(ctx: GateContext, p: str) -> str | None:
     return f.read_text(encoding="utf-8") if f.is_file() else None
 
 
+def _active(ctx: GateContext) -> list[Any]:
+    """Profiles whose checks run now: all of them, unless a wave plan makes some inactive."""
+    return list(getattr(ctx.project, "active_profiles", None) or ctx.project.profiles)
+
+
 def _missing(ctx: GateContext, p: str) -> list[Finding]:
     return [Finding("error", f"missing file: {ctx.project.rel(ctx.path(p))}")]
 
@@ -271,6 +276,57 @@ def parse_conformance(text: str) -> dict[str, dict[str, str]]:
     return rows
 
 
+DEFERRED_STATUS_RE = re.compile(r"^Deferred\s*\(?\s*(W[\w-]*)\s*\)?$", re.IGNORECASE)
+
+
+def _check_deferral(ctx: GateContext, nid: str, wave: str) -> list[Finding]:
+    """`Deferred (W2)` is valid only while an approved wave plan defers this NFR until W2 and W2 is not current yet."""
+    plan = getattr(ctx.project, "wave_plan", None)
+    if plan is None:
+        return [Finding("error", f"{nid}: 'Deferred ({wave})' needs an approved wave plan (.ekit/waves.yaml); "
+                                 "use Addressed, N/A, or Waived with an ADR")]
+    from .waves import non_deferrable
+    if nid in non_deferrable(ctx.project.kit):
+        return [Finding("error", f"{nid} cannot be deferred to a later wave (non-deferrable in policy/waves.policy.yaml)")]
+    d = plan.deferrals().get(nid)
+    if not d:
+        return [Finding("error", f"{nid}: marked Deferred ({wave}) but the approved wave plan does not defer it")]
+    until = str(d.get("until"))
+    if until.upper() != wave:
+        return [Finding("error", f"{nid}: marked Deferred ({wave}) but the approved plan defers it until {until}")]
+    if plan.order(plan.current) >= plan.order(until):
+        return [Finding("error", f"{nid} was deferred until {until} and {plan.current} is now current: "
+                                 "it is required now (Addressed, N/A, or Waived with an ADR)")]
+    note = f" (re-deferred {d['redeferred']}x)" if d.get("redeferred") else ""
+    return [Finding("info", f"{nid} deferred until {until}{note}: {d.get('reason')}")]
+
+
+@check("wave.scope")
+def wave_scope(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Waves on: every AC this feature specifies is planned for the current or an earlier wave."""
+    plan = getattr(ctx.project, "wave_plan", None)
+    if plan is None:
+        return [Finding("info", "waves not in use: no scope restriction")]
+    tp = ctx.path(w["trace"])
+    if not tp.is_file():
+        return []  # reported by trace.valid
+    t = load_yaml(tp) or {}
+    slug = Path(str(t.get("prd") or "")).name
+    cur = plan.order(plan.current)
+    out: list[Finding] = []
+    for ac in t.get("acceptance_criteria") or []:
+        wave = plan.wave_of(f"{slug}:{ac}")
+        if wave is None:
+            out.append(Finding("error", f"{slug}:{ac} is not in the approved wave plan; place it in a wave "
+                                        "(proposal + `ekit wave approve`) before specifying it"))
+        elif plan.order(wave) > cur:
+            out.append(Finding("error", f"{slug}:{ac} is planned for {wave}; the current wave is {plan.current}. "
+                                        "Leave it out of this feature (it becomes a later slice) or re-plan the waves"))
+    if not out:
+        out.append(Finding("info", f"all acceptance criteria are in scope for {plan.current}"))
+    return out
+
+
 @check("nfr.conformance")
 def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     text = _read(ctx, w["file"])
@@ -289,6 +345,10 @@ def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             out.append(Finding(level, f"{nid} ({n.get('title')}) has no row in the conformance table"))
             continue
         status = row["status"].strip("*` ")
+        deferred = DEFERRED_STATUS_RE.match(status)
+        if deferred:
+            out += _check_deferral(ctx, nid, deferred.group(1).upper())
+            continue
         if status not in allowed:
             out.append(Finding("error", f"{nid}: status '{row['status']}' not in {sorted(allowed)}"))
             continue
@@ -307,7 +367,7 @@ def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 @check("profile.required_paths")
 def required_paths(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     out = []
-    for prof in ctx.project.profiles:
+    for prof in _active(ctx):
         for rel in (prof.data.get("layout") or {}).get("required_paths", []) or []:
             if not (prof.root / rel).exists():
                 out.append(Finding("error", f"[{prof.id}] missing {ctx.project.rel(prof.root / rel)}"))
@@ -318,7 +378,7 @@ def required_paths(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 def profile_command(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     name = w["command"]
     ran, out = 0, []
-    for prof in ctx.project.profiles:
+    for prof in _active(ctx):
         res = run_profile_command(prof, name)
         if res is None:
             continue
@@ -392,6 +452,14 @@ def ac_covered(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 
 
 # ------------------------------------------------------------------------- BDD / ledger
+def _model_fields(ctx: GateContext, command: str) -> dict[str, Any]:
+    try:
+        from . import models
+        return models.ledger_fields(ctx.project.root, ctx.project.kit, command)
+    except Exception:  # noqa: BLE001 - evidence never breaks a gate
+        return {}
+
+
 def _ekit_version() -> str:
     from . import __version__
     return __version__
@@ -469,7 +537,7 @@ def _frozen_files(ctx: GateContext, d: str) -> list[Path]:
 def vacuous_steps(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     """Every step must set up or check something. Static scan, implemented for pytest-bdd."""
     out: list[Finding] = []
-    for prof in ctx.project.profiles:
+    for prof in _active(ctx):
         if not prof.runs_bdd:
             continue
         fw = prof.bdd.get("framework")
@@ -525,7 +593,7 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     want = _feature_scn_ids(ctx, w["dir"])
     if not want:
         return [Finding("error", "this feature has no @SCN-tagged scenarios (run gate scenarios first)")]
-    runners = [p for p in ctx.project.profiles if p.runs_bdd]
+    runners = [p for p in _active(ctx) if p.runs_bdd]
     if not runners:
         return [Finding("error", "no profile in this stack runs BDD acceptance tests")]
     out: list[Finding] = []
@@ -584,6 +652,8 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             "git_head": git(ctx.project.root, "rev-parse", "HEAD"),
             "kit_version": ctx.project.kit.version,
             "ekit_version": _ekit_version(),   # the CLI holds the check logic that produced this verdict
+            # model routing (optional): what was CONFIGURED for the command that produced this phase
+            **_model_fields(ctx, "speckit.esdlc.red" if expect == "red" else "speckit.implement"),
             "scenarios": {sid: status[sid] for sid in want},
             # sha256 of the feature files and bound test modules at this moment; `ledger.tests_unchanged` compares
             "fingerprints": fingerprints,
@@ -664,7 +734,7 @@ def profile_environment(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     if not in_git:
         out.append(Finding("warn", "not a git repository: cannot verify that environment folders are ignored/untracked"))
     checked = 0
-    for prof in ctx.project.profiles:
+    for prof in _active(ctx):
         env = prof.data.get("environment")
         if not env:
             continue

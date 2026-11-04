@@ -5,14 +5,14 @@ apiVersion: ekit/v1
 kind: Kit
 metadata:
   name: enterprise-sdd-kit
-  version: 0.1.6          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
+  version: 0.2.0          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
   description: >-
     BRD > PRD > SDD > TDD landing zone for GitHub Spec Kit + OpenCode with a
     generic enterprise engineering baseline and locally enforced gates.
 
 requires:
   speckit: ">=1.0.0"
-  ekit: ">=0.1.5,<0.2"     # lower: check types this kit uses; upper: CLI check logic this kit was tested with
+  ekit: ">=0.2.0,<0.3"     # lower: check types this kit uses; upper: CLI check logic this kit was tested with
   python: ">=3.11"
 
 components:
@@ -21,6 +21,8 @@ components:
   nfr_catalog: baseline/nfr-catalog.yaml   # generic NFRs (regulatory overlays come in MVP2)
   policy: policy/gates.policy.yaml         # gate definitions (portable to CI)
   opencode: opencode                        # AGENTS.md block + agents
+  waves_policy: policy/waves.policy.yaml   # optional wave planning: non-deferrable NFRs, file locations
+  models_policy: policy/models.policy.yaml # optional model routing: command/agent -> tier
 
 # A stack is a backend profile + a frontend profile.
 # `roots` says where each profile's code lives; profile commands run from that root.

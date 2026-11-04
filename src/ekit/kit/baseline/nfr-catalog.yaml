@@ -20,6 +20,8 @@ statuses:            # allowed values in conformance tables
   - Addressed        # implemented or planned in this feature/landing zone, with evidence
   - N/A              # does not apply; justification required
   - Waived           # applies but consciously deferred; justification + ADR/ticket reference required
+  # "Deferred (W2)" is also accepted when the project has an approved wave plan (.ekit/waves.yaml)
+  # that defers this NFR until W2 and W2 is not yet current. See policy/waves.policy.yaml.
 
 nfrs:
   # ---------------- Security ----------------

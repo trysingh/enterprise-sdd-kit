@@ -196,6 +196,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     pin = kitsource.cli_pin(project.root)
     print(f"ekit CLI {pin.current}, project pins {pin.pinned or 'nothing'}"
           + ("" if pin.matches else f"  !! {pin.message()}"))
+    from . import models, waves
+    plan = project.wave_plan
+    print(f"Waves: {waves.project_mode(project.root)}" + (f", current {plan.current} of {', '.join(plan.ids)}" if plan else "")
+          + (f"; inactive: {', '.join(p.id for p in project.inactive_profiles)}" if plan and project.inactive_profiles else ""))
+    rts, _ = models.routes(project.root, project.kit)
+    if rts:
+        tiers = ((models.load_config(project.root) or {}).get("tiers") or {})
+        print("Model routing: " + ", ".join(f"{t}={(tiers.get(t) or {}).get('model') or 'default'}" for t in ("flagship", "standard", "light")))
+    else:
+        print("Model routing: off")
     req = project.root / "docs" / "requirements"
     prds = sorted(p for p in req.iterdir() if p.is_dir()) if req.is_dir() else []
     print("\nRequirements")
@@ -227,6 +237,155 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  {f.name:<28} " + "    ".join(f"{c:<2}" for c in cells) + f"    {'yes' if f.name in frozen else '--'}")
     if not project.feature_dirs():
         print("  (none yet)")
+    return 0
+
+
+def cmd_wave(args: argparse.Namespace) -> int:
+    from . import waves
+    project = Project.load()
+    root, kit = project.root, project.kit
+    a = args.action
+    if a == "init":
+        dest = waves.init_proposal(root, force=args.force)
+        print(f"Wrote {project.rel(dest)}: every acceptance criterion is in W1, W2 is empty.\n"
+              "Move scope into later waves (AC-level: '<slug>:AC-012', or a whole '<slug>:FEAT-03'), add deferrals "
+              "with reason and approver, then a person runs `ekit wave approve --by \"Name\"`.")
+        return 0
+    if a == "decline":
+        waves.decline(root)
+        print("Waves declined for this project (recorded in .ekit/project.yaml). Nothing else changes.")
+        return 0
+    if a == "validate":
+        path = waves.PROPOSAL if args.proposal else waves.APPROVED
+        plan = waves.load_plan(root, path)
+        if plan is None:
+            raise EkitError(f"No {path}.")
+        errors, warnings = waves.validate(plan, kit, waves.catalog_ids(kit))
+        for w in warnings:
+            print(f"  ! {w}")
+        for e in errors:
+            print(f"  x {e}")
+        print(f"{path}: {'valid' if not errors else f'{len(errors)} problem(s)'}")
+        return 1 if errors else 0
+    if a == "approve":
+        plan, notes = waves.approve(root, kit, args.by or "")
+        for n in notes:
+            print(f"  note: {n}")
+        print(f"Approved {len(plan.ids)} wave(s) by {plan.data['approved_by']}; current wave {plan.current}. "
+              "Commit .ekit/waves.yaml and the proposal.")
+        return 0
+    if a == "advance":
+        cur, nxt, notes = waves.advance(root, kit, args.by or "", carry=args.carry)
+        for n in notes:
+            print(f"  note: {n}")
+        print(f"Moved from {cur} to {nxt}. Run `ekit gate all` and commit .ekit/waves.yaml.")
+        return 0
+    if a == "scope":
+        plan = project.wave_plan
+        if plan is None:
+            print("waves not in use: specify every acceptance criterion of the feature")
+            return 0
+        if not args.target:
+            raise EkitError("ekit wave scope FEAT-xx [--prd <slug>]")
+        slug = Path(project.resolve_prd(args.prd)).name
+        s = waves.scope_of_feature(plan, slug, args.target)
+        print(f"{slug}:{args.target} in current wave {plan.current}: {', '.join(s['now']) or '-'}")
+        if s["earlier"]:
+            print(f"  earlier waves (already planned): {', '.join(s['earlier'])}")
+        for w, acs in s["later"].items():
+            print(f"  later, {w}: {', '.join(acs)}  (not part of this slice)")
+        return 0
+    # status
+    mode = waves.project_mode(root)
+    plan = project.wave_plan
+    if args.brief:
+        print(f"waves: {mode}" + (f" ({plan.current})" if plan else ""))
+        return 0
+    if plan is None:
+        hint = {"undecided": "not decided yet: `ekit wave init` to plan in waves, or `ekit wave decline`",
+                "off": "declined for this project", "proposed": f"proposal in {waves.PROPOSAL}, not approved yet"}[mode]
+        print(f"Waves: {hint}")
+        return 0
+    progress = waves.feature_progress(root)
+    print(f"Waves: current {plan.current} (approved by {plan.data.get('approved_by')} on {plan.data.get('approved_on')})")
+    for w in plan.waves:
+        wid = str(w.get("id"))
+        acs = plan.acs_of(wid)
+        spec = sum(1 for ac in acs if ac in progress)
+        green = sum(1 for ac in acs if (progress.get(ac) or {}).get("green"))
+        marker = "->" if wid == plan.current else "  "
+        roles = ",".join(w.get("profiles") or ["all"])
+        print(f" {marker} {wid:<4} {len(acs):>3} AC  specified {spec:>3}  green {green:>3}  profiles {roles:<17} {w.get('goal') or ''}")
+    for nid, d in sorted(plan.deferrals().items()):
+        due = "DUE NOW" if plan.order(plan.current) >= plan.order(str(d.get("until"))) else f"until {d.get('until')}"
+        re_ = f", re-deferred {d['redeferred']}x" if d.get("redeferred") else ""
+        print(f"    deferred {nid:<8} {due}{re_}  ({d.get('reason')})")
+    errors, _ = waves.validate(plan, kit, waves.catalog_ids(kit))
+    if errors:
+        print(f"  !! plan no longer valid ({len(errors)} problem(s)); run `ekit wave validate`")
+    return 0
+
+
+def cmd_models(args: argparse.Namespace) -> int:
+    from . import models
+    project = Project.load()
+    root, kit = project.root, project.kit
+    a = args.action
+    if a == "off":
+        for n in models.off(root):
+            print(n)
+        return 0
+    if a == "setup":
+        found = models.discover(root)
+        rec = models.recommend(found)
+        current = ((models.load_config(root) or {}).get("tiers") or {})
+        chosen: dict[str, str | None] = {}
+        given = {"flagship": args.flagship, "standard": args.standard, "light": args.light}
+        interactive = _interactive(args) and not all(given.values())
+        if interactive:
+            print("Models configured in OpenCode (project and global opencode.json):")
+            for i, m in enumerate(found, 1):
+                ctx = f"{m['context']} tokens" if m.get("context") else "context unknown"
+                role = f", OpenCode {m['role']}" if m.get("role") else ""
+                print(f"  {i}) {m['id']:<40} {ctx}{role} [{m['source']}]")
+            if not found:
+                print("  (none found; type model ids as OpenCode expects them, e.g. ollama/qwen3:32b)")
+            hints = {"flagship": "decisions and contracts: BRD intake, constitution, landing zone, plan, red",
+                     "standard": "volume work the gates check: specify, gherkin, tasks, implement",
+                     "light": "OpenCode small_model: titles and summaries"}
+            for tier in ("flagship", "standard", "light"):
+                default = given[tier] or (current.get(tier) or {}).get("model") or rec.get(tier)
+                raw = input(f"{tier:<9} ({hints[tier]})\n          model [{default or 'none'}]: ").strip()
+                if raw.isdigit() and 1 <= int(raw) <= len(found):
+                    raw = found[int(raw) - 1]["id"]
+                chosen[tier] = raw or default
+        else:
+            for tier in ("flagship", "standard", "light"):
+                chosen[tier] = given[tier] or (current.get(tier) or {}).get("model") or (rec.get(tier) if args.recommended else None)
+            if not chosen["flagship"] or not chosen["standard"]:
+                raise EkitError("Give --flagship and --standard (and optionally --light), or --recommended, or run interactively.")
+            chosen["light"] = chosen["light"] or chosen["standard"]
+        dest = models.write_config(root, chosen)
+        print(f"Wrote {project.rel(dest)}: flagship={chosen['flagship']}, standard={chosen['standard']}, light={chosen['light']}")
+        for n in models.apply(root, kit):
+            print(f"  {n}")
+        print("Commit .ekit/models.yaml and the changed .opencode/ files, then restart OpenCode.")
+        return 0
+    # show
+    rts, notes = models.routes(root, kit)
+    if not rts:
+        print("Model routing: off (every command uses the session's default model). `ekit models setup` to turn it on.")
+        return 0
+    files = {**models.command_files(root), **models.agent_files(root)}
+    print(f"Model routing ({models.CONFIG}); the model recorded is the one configured, not proof of the one that ran")
+    for r in rts:
+        where = "" if r.name in files else "   (no file under .opencode/)"
+        flag = "  [override]" if r.overridden else ""
+        print(f"  {r.kind:<7} {r.name:<26} {r.tier:<9} {r.model or 'session default'}{flag}{where}")
+    sm = models.small_model(root, kit)
+    print(f"  small_model {'':<26} {'light':<9} {sm or 'session default'}")
+    for n in notes:
+        print(f"  note: {n}")
     return 0
 
 
@@ -317,6 +476,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("status", help="pipeline status for all PRDs and features")
     sp.set_defaults(fn=cmd_status)
+
+    sp = sub.add_parser("wave", help="optional wave planning: status | init | decline | validate | approve | advance | scope")
+    sp.add_argument("action", nargs="?", default="status",
+                    choices=["status", "init", "decline", "validate", "approve", "advance", "scope"])
+    sp.add_argument("target", nargs="?", help="for scope: the PRD feature, e.g. FEAT-02")
+    sp.add_argument("--by", help="approve / advance: the person deciding (recorded)")
+    sp.add_argument("--carry", action="store_true", help="advance: move unfinished ACs of the current wave to the next")
+    sp.add_argument("--proposal", action="store_true", help="validate the proposal instead of the approved plan")
+    sp.add_argument("--prd", help="for scope: docs/requirements/<slug>")
+    sp.add_argument("--brief", action="store_true", help="status: one line (used by the agent commands)")
+    sp.add_argument("--force", action="store_true", help="init: overwrite an existing proposal")
+    sp.set_defaults(fn=cmd_wave)
+
+    sp = sub.add_parser("models", help="optional model routing by tier: show | setup | off")
+    sp.add_argument("action", nargs="?", default="show", choices=["show", "setup", "off"])
+    sp.add_argument("--flagship", help="model id for the flagship tier, e.g. anthropic/claude-opus-x")
+    sp.add_argument("--standard", help="model id for the standard tier")
+    sp.add_argument("--light", help="model id for the light tier (OpenCode small_model); default: the standard model")
+    sp.add_argument("--recommended", action="store_true", help="setup without prompts: use the recommendation for unset tiers")
+    sp.add_argument("--non-interactive", action="store_true", help="never prompt")
+    sp.set_defaults(fn=cmd_models)
 
     sp = sub.add_parser("doctor", help="check tools, kit integrity and installation")
     sp.set_defaults(fn=cmd_doctor)

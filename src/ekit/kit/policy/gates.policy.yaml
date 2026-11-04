@@ -75,6 +75,9 @@ spec:
         - id: SPEC-NO-CLARIFY
           type: text.absent
           with: { file: "{feature_dir}/spec.md", patterns: ["\\[NEEDS CLARIFICATION"] }
+        - id: SPEC-WAVE-SCOPE
+          type: wave.scope            # waves on: every AC in trace.yaml is in the current or an earlier wave
+          with: { trace: "{feature_dir}/trace.yaml" }
         - id: SPEC-DATA-CLASS
           type: text.present
           severity: warn

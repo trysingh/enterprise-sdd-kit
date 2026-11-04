@@ -62,7 +62,20 @@ text, or both, optionally with `slug=<name>`. If it is empty, ask for the BRD an
 6. **Gate.** Run `ekit gate intake --prd docs/requirements/<slug>`. Fix every error it reports
    and re-run until it passes. Do not hand-edit around the gate.
 
-7. **Report** to the user: counts of BRs, features, ACs and open questions (blocking vs not),
+7. **Waves (optional, ask once).** Run `ekit wave status --brief`.
+   - `waves: undecided` → ask the user once: *"Do you want to deliver this product in waves (MVP1
+     showing the overall face of the system with a minimal frontend and backend, later waves
+     deepening it)?"* If yes, tell them to run `ekit wave init` and edit
+     `docs/planning/waves.proposed.yaml` (you may help draft it: AC-level scope `<slug>:AC-012`
+     or `<slug>:FEAT-03`, a reason for each placement); a person approves it with
+     `ekit wave approve --by "<name>"`. If no, tell them to run `ekit wave decline`. You never run
+     `approve`, `advance` or `decline` yourself.
+   - `waves: on (…)` and this BRD added or changed acceptance criteria → say that the new ACs must
+     be placed in a wave (edit the proposal, then a person approves it) before they can be specified,
+     and recommend a wave for each: the current wave if small and not disruptive, otherwise the next.
+   - `waves: off` or `proposed` → say nothing about waves.
+
+8. **Report** to the user: counts of BRs, features, ACs and open questions (blocking vs not),
    and the next step:
    - blocking questions open → `__SPECKIT_COMMAND_ESDLC_QUESTIONS__` (or `ekit questions export`
      to send them to the product manager);

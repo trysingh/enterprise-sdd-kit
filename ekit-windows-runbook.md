@@ -4,8 +4,10 @@ This guide covers running the Enterprise SDD Kit (`ekit`) on Windows when GitHub
 (`specify`) and OpenCode already work on the machine. It also explains how to measure the
 kit against plain Spec Kit.
 
-> **Status:** MVP1 (ekit 0.1.5, kit 0.1.6) was verified on Linux against Spec Kit 1.2.7. It is written to be
-> OS-agnostic, but this is its first Windows run, so treat the first project as the pilot.
+> **Status:** ekit 0.2.0 / kit 0.2.0. The MVP1 pipeline was verified on Linux against Spec Kit 1.2.7. It is written
+> to be OS-agnostic, but this is its first Windows run, so treat the first project as the pilot. The optional
+> waves and model tiers added in 0.2.0 are covered by unit and CLI tests but have not yet run against a live
+> Spec Kit + OpenCode install (see *I* and *J*).
 
 ---
 
@@ -46,10 +48,12 @@ kit against plain Spec Kit.
 4. One PRD per folder under `docs\requirements\<slug>\`. If there is more than one PRD, pass
    `--prd docs/requirements/<slug>` to `intake`, `ready` and `questions`.
 5. Everything ekit creates gets committed, including `.ekit\` with `kit.lock.yaml`,
-   `ledger\` and `policy.overrides.yaml`. The ledger is the evidence that tests failed
-   (red) before the code made them pass (green).
+   `ledger\` and `policy.overrides.yaml` (and, if you use them, `waves.yaml` and `models.yaml`).
+   The ledger is the evidence that tests failed (red) before the code made them pass (green).
 6. Do not edit files in `.ekit\kit\` by hand. Change the kit at its source and run
-   `ekit upgrade`. `ekit doctor` flags local edits.
+   `ekit upgrade`. `ekit doctor` flags local edits. To give the agent more detail for your
+   project or for yourself, use the places in *H. Adding your own guidance for the agent*;
+   none of them are hashed, so they never cause an integrity failure.
 7. Long paths (relevant for `node_modules`): run
    `git config --global core.longpaths true` once. If Windows still complains, enable
    *Win32 long paths* in Group Policy or the registry.
@@ -75,16 +79,22 @@ kit against plain Spec Kit.
 | Part | Where it lives | Pinned by | Changes when |
 |---|---|---|---|
 | **Rules**: gate policy, NFR catalogue, stack profiles, templates, agent rules | `.ekit/kit/` in the repository (committed) | `.ekit/kit.lock.yaml`: source, resolved commit, sha256 | someone runs `ekit upgrade` and commits the result |
-| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.1.5,<0.2`) | a developer reinstalls the CLI |
+| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.0,<0.3`) | a developer reinstalls the CLI |
+| **Project guidance**: ratified constitution, `AGENTS.md` outside the ekit block | `.specify\memory\constitution.md`, `AGENTS.md` (committed) | not pinned or hashed; reviewed in pull requests | anyone edits them (see *H*) |
+| **Personal guidance** | `$HOME\.config\opencode\AGENTS.md` (your machine only) | not pinned; never in the repository | you edit it |
+| **Wave plan** (optional) | `.ekit/waves.yaml` (approved, committed); proposal in `docs/planning/waves.proposed.yaml` | `approved_by` and history inside the file; only `ekit wave approve` / `advance` write it | a person approves or advances (see *I*) |
+| **Model routing** (optional) | `.ekit/models.yaml` (committed); `model:` lines in `.opencode/commands/*.md` | the kit's tier table (`policy/models.policy.yaml`) plus your tier → model choice | a person runs `ekit models setup` (see *J*) |
 
-Both parts decide a gate result. Identical rules judged by two different CLI versions can disagree,
+Both of the first two parts decide a gate result. Identical rules judged by two different CLI versions can disagree,
 because check logic changes between releases (0.1.1 changed how tags are read, 0.1.2 added
-`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red). So:
+`RED-STEPS-ASSERT` and `GREEN-TESTS-UNCHANGED`, 0.1.5 stopped counting skipped scenarios as red). Project and
+personal guidance shape what the agent tries; they never change what a gate accepts. The wave plan does change
+what a gate accepts (scope, deferrals, active profiles), which is why only a person can approve it. So:
 
 - **One CLI version per project.** `ekit init` and `ekit upgrade` record the running CLI version in the lock.
   Everyone, and CI, installs exactly that version.
-- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.1.5`; one tag then fixes both the CLI
-  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.1.5`.
+- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.0`; one tag then fixes both the CLI
+  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.0`.
 - **Mismatch is visible.** `ekit doctor` fails the row *ekit CLI matches the project pin*, `ekit status` prints a
   `!!` line, and every gate report (text, JSON and JUnit) carries a note naming both versions.
 - **CI refuses to judge with the wrong CLI.** Set `EKIT_REQUIRE_PINNED_CLI=1` in the pipeline: a gate then exits 2
@@ -140,16 +150,23 @@ ekit doctor                 # outside a project it checks tools only
 Optional, to make your team's kit the default source for every `init`:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("EKIT_KIT_SOURCE", "git+https://git.example.com/eng/sdd-kit.git@v0.1.5", "User")
+[Environment]::SetEnvironmentVariable("EKIT_KIT_SOURCE", "git+https://git.example.com/eng/sdd-kit.git@v0.2.0", "User")
 # use the same tag for the CLI itself:
-uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.1.5
+uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.0
+```
+
+Optional, personal rules for the agent in every project on this machine (see *H*):
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.config\opencode" | Out-Null
+notepad "$HOME\.config\opencode\AGENTS.md"
 ```
 
 ### B. When the kit itself changes (new kit version)
 
 ```powershell
 # Reinstall the CLI from the new tag (preferred) or the updated folder
-uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.1.5
+uv tool install --force git+https://git.example.com/eng/sdd-kit.git@v0.2.0
 # or: uv tool install --force C:\tools\enterprise-sdd-kit
 ekit --version
 ```
@@ -161,8 +178,11 @@ longer matches their pin. Move a project deliberately, as one reviewed change:
 cd C:\work\loan-origination
 ekit upgrade                      # re-vendors the kit and re-pins the CLI version in kit.lock.yaml
 ekit doctor
-git add .ekit; git commit -m "chore: ekit 0.1.5 / kit 0.1.6"
+git add .ekit; git commit -m "chore: ekit 0.2.0 / kit 0.2.0"
 ```
+
+`ekit upgrade` rewrites only the ekit block in `AGENTS.md` and never touches a ratified constitution, so project
+principles (IX+) and your own `AGENTS.md` text survive the upgrade.
 
 After the merge, everyone on the project (and the CI image) installs the same tag. Until then, keep
 the previous CLI for projects that have not moved: `uv tool install --force git+…@v<previous>`.
@@ -175,7 +195,7 @@ the previous CLI for projects that have not moved: `uv tool install --force git+
 cd C:\work
 ekit init loan-origination --stack fastapi-react
 #   asks for the kit source (bundled / local folder / git). Skip the prompt with:
-#   --source bundled   |   --source C:\tools\enterprise-sdd-kit   |   --source git+https://…@v0.1.5
+#   --source bundled   |   --source C:\tools\enterprise-sdd-kit   |   --source git+https://…@v0.2.0
 cd loan-origination
 ekit doctor
 git add -A; git commit -m "chore: enterprise SDD landing zone (ekit)"
@@ -194,16 +214,20 @@ git add -A; git commit -m "chore: adopt enterprise SDD kit (ekit)"
 opencode
 ```
 
+Optional: to run the flagship-tier steps below on your flagship model, set up model tiers first with
+`ekit models setup` (see *J*), commit, and restart OpenCode.
+
 Then, inside OpenCode, **once per project**:
 
 ```text
-/speckit.constitution          ratify the constitution (principles I–VIII are fixed)
+/speckit.constitution          ratify the constitution (principles I–VIII are fixed; project principles go in IX+, see H)
 /speckit.esdlc.baseline        greenfield: builds the skeleton; brownfield: gap assessment
 ```
 
 Back in PowerShell:
 
 ```powershell
+git diff .specify/memory/constitution.md   # only placeholders, version/dates and IX+ should have changed
 ekit run install               # creates .venv / node_modules from the lockfiles
 ekit gate baseline             # must pass before feature work
 git add -A; git commit -m "chore: landing zone and baseline conformance"
@@ -240,9 +264,17 @@ ekit gate ready                # must pass before specifying features of this PR
 Then run `/speckit.esdlc.questions` once more in OpenCode so the answers are carried into
 `prd.md`.
 
+At the end of `/speckit.esdlc.brd` the agent asks **once** whether to deliver the product in waves. Answer in
+chat, then run the matching command yourself in PowerShell (the agent is not allowed to): `ekit wave init`
+to plan in waves (see *I*), or `ekit wave decline`. If waves are already on, a new or changed BRD's
+acceptance criteria must be placed in a wave and approved before they can be specified.
+
 ### E. Once per feature (repeat for each `FEAT-xx` in the PRD)
 
-In OpenCode, in this order. Each command runs its own gate and stops if the gate fails.
+In OpenCode, in this order. Each command runs its own gate and stops if the gate fails. With waves on, a
+feature here is a **wave slice**: `/speckit.specify FEAT-02` includes only the ACs `ekit wave scope FEAT-02` lists
+for the current wave, and a later slice of the same PRD feature becomes a new feature folder (e.g.
+`011-loan-application-w2`).
 
 | # | Slash command | Gate it enforces |
 |---|---|---|
@@ -322,16 +354,190 @@ Commit after `upgrade` or `sync`.
 `.ekit\policy.overrides.yaml`. Every entry needs a `reason`, `approved_by` and `expires`;
 an entry missing one of them, or past its expiry, is ignored and the gate report says so.
 
+### H. Adding your own guidance for the agent
+
+You can give the agent more detail for your use case (domain terms, conventions, worked examples,
+personal preferences) without touching anything ekit pins. None of the places below is hashed or
+read by a gate, so additions never cause a SHA or integrity failure. Choose by who should see it:
+
+| Put it in | Who sees it | Which tool provides it | Use it for |
+|---|---|---|---|
+| `.specify\memory\constitution.md`, principle **IX and above** | the whole team (committed) | **Spec Kit**: the constitution file and `/speckit.constitution`. **ekit** seeds principles I–VIII into it via the `enterprise-baseline` preset | project-wide principles, e.g. "amounts are integer minor units, never floats" |
+| `AGENTS.md`, **outside** the `<!-- ekit:begin -->…<!-- ekit:end -->` block | the whole team (committed) | **OpenCode** loads it in every session. **ekit** keeps your text when `ekit sync` / `ekit upgrade` rewrite their block | conventions, domain glossary, module map, examples of good code |
+| `$HOME\.config\opencode\AGENTS.md` | only you, in every project on this machine (never in the repository) | **OpenCode** global rules, combined with the project's `AGENTS.md` | personal preferences: how much to explain, review style, naming habits |
+
+**Add a project principle** (inside OpenCode):
+
+```text
+/speckit.constitution Add principle IX "Money as integers": store and compute amounts as integer minor units; never floats.
+```
+
+Then review and commit in PowerShell:
+
+```powershell
+git diff .specify/memory/constitution.md   # only IX+ and the version / Last Amended lines may change
+git add .specify/memory/constitution.md; git commit -m "docs(constitution): add principle IX"
+```
+
+**Add project notes for the agent:** edit `AGENTS.md` below the `<!-- ekit:end -->` line (or above
+`<!-- ekit:begin`), commit it, and restart OpenCode.
+
+**Add personal rules:** edit `$HOME\.config\opencode\AGENTS.md` (for example
+`C:\Users\<you>\.config\opencode\AGENTS.md`) and restart OpenCode. If the notes only matter for one
+project, put them under a heading that names it. There is no per-developer, per-project file yet.
+This is the first Windows run: if OpenCode doesn't pick the file up, check where your OpenCode build
+keeps its global configuration and put `AGENTS.md` there.
+
+Rules that keep this safe:
+
+- **Add or tighten, never loosen.** A principle or note may add detail or be stricter. It cannot relax
+  principles I–VIII or a gate. Relaxing a check goes through `.ekit\policy.overrides.yaml` (reason,
+  approver, expiry); deferring an NFR goes through a `Waived` row with an ADR.
+- **The gates decide, not the text.** Gates read the policy in `.ekit\kit\`, not the constitution or
+  `AGENTS.md`. A note saying "60% coverage is fine" changes what the agent attempts, not what
+  `ekit gate green` accepts.
+- **Never write inside the ekit block** of `AGENTS.md`; `ekit sync` and `ekit upgrade` overwrite it.
+- **Never put guidance in `.ekit\kit\`.** `ekit doctor` reports a kit-integrity failure, and the agent's
+  edit tools are denied there anyway.
+- **Personal rules must not contradict project rules.** OpenCode combines both files; the gates still
+  judge the result.
+
+**What ekit 0.2.0 does not check yet.** Principles I–VIII in the ratified constitution are protected by
+pull-request review only. They are not covered by `kit.lock.yaml` (which hashes `.ekit\kit\` only), no gate
+compares them with the kit template, and `ekit sync` / `ekit upgrade` never rewrite a ratified constitution.
+Reviewers compare any change to I–VIII with
+`.ekit\kit\preset\enterprise-baseline\templates\constitution-template.md`; such a change is rejected unless
+it comes with an ADR and a new kit version. To see the full history:
+
+```powershell
+git log -p -- .specify/memory/constitution.md
+```
+
+### I. Optional: delivering in waves (several MVPs)
+
+Off unless you turn it on. **W1** shows the overall face of the system: navigation shell, sign-in, a minimal
+screen and one working happy path per major feature, on a real backend. Later waves deepen it by priority
+(remaining acceptance criteria, edge cases, admin depth, deferred NFRs) and absorb new BRDs.
+
+| Step | Who | Command |
+|---|---|---|
+| Start a proposal | person | `ekit wave init` → `docs/planning/waves.proposed.yaml`, every AC in W1, an empty W2 |
+| Shape it | product owner, with the agent's help | edit the proposal: move ACs (`loan:AC-012`) or whole features (`loan:FEAT-03`) to later waves, add `dependencies`, add `defer` entries with `reason` and `approved_by`; optional `profiles: [backend]` for a backend-only wave |
+| Check it | anyone | `ekit wave validate --proposal` |
+| Approve it | person | `ekit wave approve --by "Head of Product"` |
+| Work the current wave | team + agent | the feature pipeline (*E*) for each slice; `ekit wave scope FEAT-xx` shows what belongs to this wave |
+| Move on | person | `ekit wave advance --by "Head of Product"` (add `--carry` to move unfinished ACs to the next wave) |
+| See where things stand | anyone | `ekit wave` (or `ekit status`) |
+
+```powershell
+ekit wave init
+# edit docs/planning/waves.proposed.yaml
+ekit wave validate --proposal
+ekit wave approve --by "Head of Product"
+git add .ekit/waves.yaml docs/planning; git commit -m "plan: approve waves"
+```
+
+A minimal proposal:
+
+```yaml
+apiVersion: ekit/v1
+kind: WavePlan
+waves:
+  - id: W1
+    goal: "Face of the system"
+    scope: ["loan:FEAT-01", "loan:AC-003"]          # all of FEAT-01, one AC of FEAT-02
+  - id: W2
+    goal: "Deepen: applications and admin"
+    scope: ["loan:AC-004", "loan:FEAT-03"]
+dependencies:
+  "loan:FEAT-03": ["loan:FEAT-01"]                  # admin needs users first
+defer:
+  - {nfr: UX-01, until: W2, reason: "UI is a thin shell in W1", approved_by: "Head of Product"}
+```
+
+What the rules are:
+
+- **Every AC of every PRD is in exactly one wave.** Approval writes the plan with explicit ACs, so an AC added
+  later (a new or changed BRD) is "not in any wave" until someone places it in the proposal and approves again;
+  approval lists the newly placed ACs.
+- **Scope:** `ekit gate spec` fails (`SPEC-WAVE-SCOPE`) when a feature specifies an AC planned for a later wave.
+- **Deferrals:** a conformance row may say `Deferred (W2)` only while W2 is still in the future and only for an
+  NFR the plan defers. The NFRs in `.ekit\kit\policy\waves.policy.yaml` (authentication, authorisation, input
+  validation, secrets, scanning, data classification, ENV-01, test-first, lint, ADRs) can never be deferred.
+  Moving a deferral to a later wave is recorded as a re-deferral and counted in `ekit wave`.
+- **Advancing** is refused while an AC of the current wave has no green feature, unless `--carry` moves it on
+  (recorded). NFRs deferred to the new wave become required. A wave with `profiles: [backend]` skips the
+  frontend's commands, paths, environment and BDD runs, and every gate report names what is skipped; when the
+  frontend becomes active, run `ekit gate baseline` again.
+- **Turning it off:** `ekit wave decline` before anything is approved. Once a plan is approved, removing
+  `.ekit\waves.yaml` is a reviewed change.
+
+Not in 0.2.0 yet: an agent command that drafts the proposal with a reason per feature, `ekit wave move` and a CSV
+round-trip for the product owner (0.2.1); change-impact analysis and a cross-wave regression gate (0.3.0).
+
+### J. Optional: model tiers
+
+Off unless you turn it on. The kit decides which **tier** each command runs on; you decide which **model** serves
+each tier. Decisions and contracts run on the flagship model; volume work the gates check runs on the standard
+model.
+
+| Tier | Commands and agents |
+|---|---|
+| flagship | `/speckit.esdlc.brd`, `/speckit.constitution`, `/speckit.esdlc.baseline`, `/speckit.plan`, `/speckit.esdlc.red`; agents `requirements-analyst`, `test-author` |
+| standard | `/speckit.specify`, `/speckit.clarify`, `/speckit.esdlc.questions`, `/speckit.esdlc.gherkin`, `/speckit.tasks`, `/speckit.implement`, `/speckit.analyze`, `/speckit.checklist` |
+| light | OpenCode `small_model` (titles, summaries) |
+
+Red runs on flagship because it writes the frozen tests that green is judged against: the gates can prove a
+test fails, not that it checks the right thing.
+
+```powershell
+ekit models setup          # lists the models in your project and global opencode.json, recommends one per tier
+# or without prompts:
+ekit models setup --flagship anthropic/<flagship-model> --standard ollama/qwen3:32b --light ollama/gemma4:31b-cloud
+ekit models                # the routing table
+git add .ekit/models.yaml .opencode opencode.json; git commit -m "chore: model tiers"
+```
+
+Then **restart OpenCode**. Every routed command starts with a line such as
+`[ekit] tier: flagship · model: anthropic/<flagship-model>`; OpenCode also shows the active model in its UI.
+
+- ekit writes `model:` into the frontmatter of each command in `.opencode\commands\` (OpenCode's per-command
+  override) and of the kit's agents, and sets `small_model` in `opencode.json`. A Spec Kit upgrade regenerates
+  the command files: run `ekit sync` afterwards (`ekit doctor` reports files where routing is missing).
+- Red and green ledger entries record `model_tier` and `model_configured`. That is the configured model, not proof
+  of the one that ran: switching models in the OpenCode UI is still possible.
+- If the flagship model is unavailable, do not switch silently. Add a temporary override to `.ekit\models.yaml` and
+  commit it:
+
+  ```yaml
+  overrides:
+    speckit.esdlc.red: {tier: standard, reason: "flagship quota exhausted", approved_by: "Tech Lead", expires: 2026-12-15}
+  ```
+
+  Like policy overrides, an entry without `reason`, `approved_by` and an unexpired `expires` is ignored.
+- `ekit doctor` warns when a tier's model has a smaller context window than recommended (flagship 64k,
+  standard 32k), if `opencode.json` records it under `provider.<name>.models.<model>.limit.context`.
+- `ekit models off` removes everything ekit wrote and deletes `.ekit\models.yaml`.
+- Data-residency rules per tier (which models may see Restricted data) are reserved for the regulatory overlays
+  (MVP2) and not enforced yet.
+
+First live run to confirm: `ekit models` should list no command with "(no file under .opencode/)" for the
+commands your Spec Kit version installs. If it does, Spec Kit writes its OpenCode commands somewhere else on your
+version; report it so the kit can learn the location.
+
 ### Frequency summary
 
 | Frequency | Commands |
 |---|---|
-| Once per machine | `uv tool install`, `uv tool update-shell`, `ekit doctor` |
+| Once per machine | `uv tool install`, `uv tool update-shell`, `ekit doctor`; optional `$HOME\.config\opencode\AGENTS.md` |
 | Per kit release | `uv tool install --force git+…@<tag>`, then per project `ekit upgrade` + commit `.ekit/`; everyone (and CI) installs the same tag |
 | Once per project | `ekit init` / `ekit adopt`, `/speckit.constitution`, `/speckit.esdlc.baseline`, `ekit run install`, `ekit gate baseline` |
 | Per BRD | `/speckit.esdlc.brd`, `/speckit.esdlc.questions` or `ekit questions export/import`, `ekit gate ready` |
 | Per feature | specify → gherkin → plan → tasks → red → *commit, restart OpenCode* → implement → *commit* → `ekit gate all` |
 | Daily | `ekit status`, `ekit gate <id>`, `ekit run <cmd>`; `ekit run install` after clone/pull of dependency changes |
+| Per wave (optional) | `ekit wave` to check progress; edit the proposal + `ekit wave approve --by` when scope changes or a BRD arrives; `ekit wave advance --by` to move on |
+| After a Spec Kit upgrade (model tiers on) | `ekit sync`, restart OpenCode |
+| As needed | project principle IX+ via `/speckit.constitution`; notes in `AGENTS.md` outside the ekit block; personal rules in `$HOME\.config\opencode\AGENTS.md`; restart OpenCode after each |
 
 ---
 
@@ -394,6 +600,11 @@ traceability, NFR coverage, rework and cost.
 7. **Answer business questions identically.** Keep a "business oracle" sheet of answers the
    product manager has agreed. In the no-kit arm, answer only when the agent asks. In the
    kit arm, answer through the questions register. Record how many questions each arm raised.
+8. **Same personal rules in both arms.** `$HOME\.config\opencode\AGENTS.md` applies to every session on the
+   machine, so it affects both arms. Keep it identical (or empty) for the whole benchmark and record it.
+9. **Waves off and one model in both arms** for the headline comparison: Arm A has no routing, so run Arm B
+   without `ekit models setup` too. Measure waves and model tiers as separate experiments (Arm B with and
+   without them), and record the routing table (`ekit models`) with each run.
 
 ### 5.2 Create the two arms
 
@@ -452,7 +663,7 @@ Record one row per run in a spreadsheet (`benchmark.csv`):
 ```text
 arm,run,brd,model,ekit_cli,kit_version,features,lead_time_min,interventions,questions_raised,wrong_guesses,holdout_pass_pct,defects_after_done,nfr_met_pct,ac_traced_pct,test_first(y/n),rework_lines,coverage_pct,lint_findings,sca_high,tokens,cost
 plain,1,loan-v3,<model>,-,-,3,,,,,,,,,,,,,,,
-ekit,1,loan-v3,<model>,0.1.5,0.1.6,3,,,,,,,,,,,,,,,
+ekit,1,loan-v3,<model>,0.2.0,0.2.0,3,,,,,,,,,,,,,,,
 ```
 
 Compare the **median of each arm**. Report deltas for M1, M2, M4, M5, M6 and M10 first,
@@ -478,11 +689,21 @@ Adopt the kit as the default if, across 3+ runs, all of these hold:
 | Slash commands missing in OpenCode | OpenCode started outside the project root, or not restarted after `ekit sync` | `cd` to the root and restart `opencode` |
 | `Cannot tell which feature to check` | not on the `NNN-name` branch | `git switch 001-…`, or add `--feature 001-…` |
 | `Cannot tell which PRD to check` | more than one PRD folder | add `--prd docs/requirements/<slug>` |
-| `kit integrity` fails in `ekit doctor` | someone edited `.ekit\kit\` | revert those files, or run `ekit upgrade` |
+| `kit integrity` fails in `ekit doctor` | someone edited `.ekit\kit\` (often to add project guidance) | revert those files, or run `ekit upgrade`; put the guidance in the constitution IX+, `AGENTS.md` outside the ekit block, or your personal file (section *H*) |
+| Your notes in `AGENTS.md` disappeared after `ekit sync` / `ekit upgrade` | they were written inside the `<!-- ekit:begin -->…<!-- ekit:end -->` block | restore them from git (`git log -p -- AGENTS.md`) and move them outside the block |
+| The agent ignores your project notes or personal rules | OpenCode not restarted; started outside the project root; personal file not in OpenCode's global config folder | restart `opencode` from the project root; check the file is at `$HOME\.config\opencode\AGENTS.md` (or wherever your OpenCode build keeps global config) |
+| A constitution diff touches principles I–VIII | `/speckit.constitution` reworded or "simplified" them | restore I–VIII from `.ekit\kit\preset\enterprise-baseline\templates\constitution-template.md`, keep only your IX+ changes; changing I–VIII needs an ADR and a new kit version |
+| `spec`: "loan:AC-012 is planned for W2; the current wave is W1" (`SPEC-WAVE-SCOPE`) | the feature includes an AC from a later wave | drop it from this slice (`ekit wave scope FEAT-xx` shows what belongs now), or re-plan: edit the proposal, `ekit wave approve --by …` |
+| `spec`: "… is not in the approved wave plan", or a gate note "the approved wave plan is no longer valid" | a new or changed BRD added ACs nobody has placed | place them in the proposal and approve again; approval lists the newly placed ACs |
+| `plan`/`baseline`: "Deferred (W2) needs an approved wave plan" / "cannot be deferred" / "is required now" | `Deferred` used without waves, for a non-deferrable NFR, or after its wave became current | use Addressed, N/A or Waived with an ADR; or add the deferral to the proposal and approve (not possible for non-deferrable NFRs) |
+| `ekit wave advance`: "… acceptance criteria of W1 have no green feature yet" | the wave is not finished | finish those slices, or `--carry` them to the next wave (recorded) |
+| The agent says a command was denied (`ekit wave approve`, `ekit models`, `ekit unfreeze`, `ekit upgrade`) | these record a person's decision; `opencode.json` denies them to the agent's shell tool | run the command yourself in PowerShell |
+| `ekit doctor`: "model routing … missing or outdated in …" | Spec Kit regenerated the command files (upgrade, `ekit sync` before 0.2.0) | `ekit sync`, then restart OpenCode |
+| A routed command does not start with the `[ekit] tier: …` line | OpenCode not restarted after `ekit models setup` / `ekit sync`, or the model ignored the banner | restart OpenCode; check the active model in OpenCode's UI and `ekit models` |
 | `ekit doctor`: "ekit CLI matches the project pin" fails | you run a different CLI version than the one in `.ekit/kit.lock.yaml` | install the pinned tag: `uv tool install --force git+https://…/sdd-kit.git@v<pinned>`; or, as a reviewed change for the whole team, `ekit upgrade` and commit `.ekit/` |
 | Teammates or CI get a different gate result for the same commit | different ekit CLI versions (check logic differs), or `.ekit/` changes not committed | compare `ekit --version`; `git status .ekit`; see *What is pinned, and what is not* |
 | Gate exits 2: "EKIT_REQUIRE_PINNED_CLI is set …" | CI runner installed another CLI than the pin | install the CLI tag named in the lock in the pipeline |
-| "Kit … requires ekit >=0.1.5,<0.2 … (not <0.2)" | your CLI is newer than the kit allows | install a CLI in the allowed range, or upgrade the project to a kit that allows your CLI |
+| "Kit … requires ekit >=0.2.0,<0.3 … (not >=0.2.0)" | your CLI is older or newer than the kit allows | install a CLI in the allowed range (`uv tool install --force git+…@v0.2.0`), or upgrade the project to a kit that allows your CLI |
 | "kit.lock.yaml does not record an ekit CLI version" | project vendored by ekit < 0.1.4 | run `ekit upgrade` once with the team's CLI and commit `.ekit/` |
 | `red`: "produced no report" | BDD runner not wired, or doesn't compile yet | run `ekit run acceptance` and read the error; the report path is in `ekit context` |
 | `red`: "PASSES before implementation" | the test doesn't check the new behaviour | strengthen the assertion. Don't change the gate |

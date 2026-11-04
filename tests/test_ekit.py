@@ -304,7 +304,7 @@ def test_bundled_kit_declares_the_new_checks_and_matching_requirement():
     pol = Kit.load(KIT).policy()["spec"]["gates"]
     ids = {c["id"] for g in pol for c in g["checks"]}
     assert {"RED-STEPS-ASSERT", "GREEN-TESTS-UNCHANGED"} <= ids
-    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.1.5,<0.2"
+    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.0,<0.3"
 
 
 # ------------------------------------------------------------------ 0.1.3: edit protection (freeze)
@@ -341,7 +341,10 @@ def test_sync_preserves_user_content_and_normalises_a_string_edit_rule(tmp_path)
     freeze.sync_permissions(tmp_path)
     cfg = _json.loads((tmp_path / "opencode.json").read_text())
     assert cfg["provider"] == {"ollama": {"name": "Ollama"}} and cfg["model"] == "ollama/qwen3:14b"
-    assert cfg["permission"]["bash"] == {"rm *": "deny"}
+    bash = cfg["permission"]["bash"]
+    assert bash["rm *"] == "deny" and bash["*"] == "allow"            # the user's rule survives
+    assert list(bash)[-len(freeze.ALWAYS_BASH):] == freeze.ALWAYS_BASH  # ekit's denies come last (last match wins)
+    assert all(bash[p] == "deny" for p in freeze.ALWAYS_BASH)
     assert cfg["permission"]["edit"]["*"] == "ask"                    # the user's own default survives
 
 

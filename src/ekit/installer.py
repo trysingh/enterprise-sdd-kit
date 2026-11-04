@@ -283,6 +283,16 @@ def sync(project: Project) -> None:
     install_opencode_assets(project)
     scaffold(project)
     apply_edit_protection(project)
+    apply_model_routing(project)
+
+
+def apply_model_routing(project: Project) -> None:
+    """Optional: re-write `model:` into command/agent files (Spec Kit regenerates them, which drops it)."""
+    from . import models
+    if models.load_config(project.root) is None:
+        return
+    for n in models.apply(project.root, project.kit):
+        say(f"  {n}")
 
 
 def apply_edit_protection(project: Project) -> None:
@@ -365,6 +375,20 @@ def doctor(project: Project | None) -> int:
     row(DEFAULT_INTEGRATION in installed_integrations(project.root), "opencode integration")
     row((project.root / ".specify" / "extensions" / "esdlc").is_dir(), "esdlc extension")
     row(_preset_installed(project), "enterprise-baseline preset")
+    say("\nWaves and model routing (optional)")
+    from . import models, waves
+    mode = waves.project_mode(project.root)
+    if mode == "on":
+        try:
+            errs, _ = waves.validate(project.wave_plan, project.kit, waves.catalog_ids(project.kit))
+            row(not errs, "wave plan", f"current {project.wave_plan.current}" if not errs else f"{len(errs)} problem(s): `ekit wave validate`")
+        except EkitError as exc:
+            row(False, "wave plan", str(exc))
+    else:
+        row(True, "wave plan", {"off": "declined", "proposed": "proposal not approved yet",
+                                "undecided": "not in use (optional)"}[mode])
+    for ok, label, detail in models.doctor_rows(project.root, project.kit):
+        row(ok, label, detail)
     say("\nEdit protection (opencode.json)")
     from . import freeze
     for ok, label, detail in freeze.verify(project.root):

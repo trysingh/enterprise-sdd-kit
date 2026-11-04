@@ -1,2 +1,2 @@
 """Enterprise SDD Kit: BRD > PRD > SDD > TDD landing zone for GitHub Spec Kit + OpenCode."""
-__version__ = "0.1.5"
+__version__ = "0.2.0"

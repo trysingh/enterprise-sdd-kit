@@ -1,0 +1,43 @@
+# Model routing policy (optional feature; used only when a project has .ekit/models.yaml).
+#
+# The kit decides which TIER each OpenCode command and agent runs on. The project decides which
+# MODEL serves each tier (`ekit models setup`, stored in .ekit/models.yaml). ekit writes the
+# resulting `model:` into the command and agent frontmatter on `ekit models setup` and `ekit sync`.
+#
+# Rule of thumb: flagship for decisions and contracts (a mistake there spreads downstream and no
+# gate can fully judge it), standard for volume work the gates check.
+apiVersion: ekit.policy/v1
+kind: ModelPolicy
+metadata:
+  name: enterprise-generic
+  version: 0.1.0
+
+tiers: [flagship, standard, light]
+
+commands:
+  # flagship: decisions and contracts
+  speckit.esdlc.brd: flagship         # BRD -> PRD, open questions: wrong here = wrong everywhere
+  speckit.constitution: flagship
+  speckit.esdlc.baseline: flagship    # landing zone every feature extends
+  speckit.plan: flagship              # architecture and NFR conformance
+  speckit.esdlc.red: flagship         # the frozen tests green is judged against
+  # standard: volume work checked by gates
+  speckit.specify: standard
+  speckit.clarify: standard
+  speckit.esdlc.questions: standard
+  speckit.esdlc.gherkin: standard
+  speckit.tasks: standard
+  speckit.implement: standard
+  speckit.analyze: standard
+  speckit.checklist: standard
+
+agents:
+  requirements-analyst: flagship
+  test-author: flagship
+
+small_model: light                    # OpenCode `small_model`: titles, summaries
+
+# Warn in `ekit doctor` when a tier's model is known to have a smaller context window.
+min_context:
+  flagship: 64000
+  standard: 32000

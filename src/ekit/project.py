@@ -222,8 +222,33 @@ class Project:
     def roles(self) -> set[str]:
         return {p.role for p in self.profiles}
 
+    # ---------------------------------------------------------------- waves (optional)
+    @property
+    def wave_plan(self) -> Any:
+        """The approved wave plan (.ekit/waves.yaml), or None when waves are not in use."""
+        if not hasattr(self, "_wave_plan"):
+            from .waves import load_plan
+            self._wave_plan = load_plan(self.root)
+        return self._wave_plan
+
+    @property
+    def active_roles(self) -> set[str]:
+        plan = self.wave_plan
+        return self.roles if plan is None else plan.active_roles(self.roles)
+
+    @property
+    def active_profiles(self) -> list[Profile]:
+        """Profiles whose checks run now. Without a wave plan: all of them."""
+        active = self.active_roles
+        return [p for p in self.profiles if p.role in active]
+
+    @property
+    def inactive_profiles(self) -> list[Profile]:
+        active = self.active_roles
+        return [p for p in self.profiles if p.role not in active]
+
     def applicable_nfrs(self, scope: str | None = None) -> list[dict[str, Any]]:
-        roles = self.roles
+        roles = self.active_roles
         out = []
         for n in self.kit.nfr_catalog().get("nfrs", []):
             applies = n.get("applies_to", "all")

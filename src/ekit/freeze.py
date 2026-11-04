@@ -26,6 +26,16 @@ from .project import EkitError, dump_yaml, git, load_yaml
 OPENCODE_JSON = "opencode.json"
 SCHEMA = "https://opencode.ai/config.json"
 ALWAYS = [".ekit/*", "opencode.json", ".opencode/*"]
+# Decisions a person makes: denied to the agent's shell tool (`permission.bash`). Running them through
+# another wrapper (`uv run ekit …`, a script) is not covered; the records they write name who acted.
+ALWAYS_BASH = [
+    "ekit unfreeze*",
+    "ekit upgrade*",
+    "ekit wave approve*",
+    "ekit wave advance*",
+    "ekit wave decline*",
+    "ekit models*",
+]
 
 
 def state_path(root: Path) -> Path:
@@ -36,6 +46,7 @@ def load_state(root: Path) -> dict[str, Any]:
     p = state_path(root)
     data = (load_yaml(p) or {}) if p.is_file() else {}
     data.setdefault("managed", [])
+    data.setdefault("managed_bash", [])
     data.setdefault("frozen", {})
     data.setdefault("history", [])
     return data
@@ -96,8 +107,26 @@ def sync_permissions(root: Path) -> list[str]:
         rules.pop(pat, None)
         rules[pat] = "deny"                       # re-inserted last: the last matching rule wins
     perm["edit"] = rules
+    bash = perm.get("bash")
+    if bash is None:
+        brules: dict[str, str] = {}
+    elif isinstance(bash, str):
+        brules = {"*": bash}
+    elif isinstance(bash, dict):
+        brules = dict(bash)
+    else:
+        raise EkitError(f"{OPENCODE_JSON}: `permission.bash` must be a string or an object.")
+    for old_pat in state["managed_bash"]:
+        brules.pop(old_pat, None)
+    if "*" not in brules:
+        brules = {"*": "allow", **brules}        # OpenCode's default for bash; keeps behaviour unchanged
+    for pat in ALWAYS_BASH:
+        brules.pop(pat, None)
+        brules[pat] = "deny"                      # last matching rule wins
+    perm["bash"] = brules
     (root / OPENCODE_JSON).write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     state["managed"] = desired
+    state["managed_bash"] = list(ALWAYS_BASH)
     dump_yaml(state, state_path(root))
     return desired
 
@@ -152,6 +181,12 @@ def verify(root: Path) -> list[tuple[bool, str, str]]:
     rows: list[tuple[bool, str, str]] = []
     missing = [pat for pat in ALWAYS if rules.get(pat) != "deny"]
     rows.append((not missing, "agent cannot edit ekit/OpenCode wiring", ", ".join(ALWAYS) if not missing else f"missing deny for {', '.join(missing)}: run `ekit sync`"))
+    brules = ((json.loads(p.read_text(encoding="utf-8-sig")).get("permission") or {}).get("bash"))
+    brules = brules if isinstance(brules, dict) else {}
+    bmissing = [pat for pat in ALWAYS_BASH if brules.get(pat) != "deny"]
+    rows.append((not bmissing, "agent cannot run approval commands",
+                 "ekit unfreeze / upgrade / wave approve|advance|decline / models" if not bmissing
+                 else f"missing bash deny for {', '.join(bmissing)}: run `ekit sync`"))
     for feature, pats in sorted(state["frozen"].items()):
         gone = [x for x in pats if rules.get(x) != "deny"]
         rows.append((not gone, f"{feature} frozen", f"{len(pats)} rule(s)" if not gone else f"missing deny for {', '.join(gone)}: run `ekit freeze {feature}`"))

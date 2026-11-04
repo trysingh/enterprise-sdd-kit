@@ -114,9 +114,9 @@ question must name who decided (`answered_by`): `ekit questions import` refuses 
 
 - **intake**: files exist; BR ids present; AC ids unique; every BR cited by an AC or listed out of scope; question register valid.
 - **ready**: no open/deferred blocking question; every answered blocking question names `answered_by`; no `[TBD…]` / `[NEEDS CLARIFICATION` in the PRD.
-- **spec**: `trace.yaml` valid and points at real ACs; every AC referenced in `spec.md`; no clarification markers.
+- **spec**: `trace.yaml` valid and points at real ACs; every AC referenced in `spec.md`; no clarification markers; with an approved wave plan, every AC is in the current or an earlier wave (`SPEC-WAVE-SCOPE`).
 - **scenarios**: `.feature` files parse; each scenario has exactly one `@SCN-<feature>-nn`, unique repo-wide; every AC is tagged on ≥1 scenario.
-- **plan**: every applicable **feature-scope** NFR has a row `Addressed | N/A | Waived`; evidence/justification present; `Waived` cites an ADR (`ADR-0007` or `docs/adr/0007-….md`; a date is not an ADR reference).
+- **plan**: every applicable **feature-scope** NFR has a row `Addressed | N/A | Waived`; evidence/justification present; `Waived` cites an ADR (`ADR-0007` or `docs/adr/0007-….md`; a date is not an ADR reference); with an approved wave plan, `Deferred (W2)` for an NFR the plan defers until W2.
 - **baseline**: same for **platform-scope** NFRs in `baseline-conformance.md`; profile `required_paths` exist; **ENV-01** environment isolation (below); lint runs.
 - **red**: first scans the step modules (`RED-STEPS-ASSERT`, pytest-bdd): a step whose body is `pass`, `...`, a docstring or `assert True` is an error, as is an absolute path in `scenarios()`. Then runs the acceptance suite(s); every scenario of the feature appears in the Cucumber-JSON report and **fails** (a scenario that passes before implementation is an error; undefined, pending, ambiguous or **skipped** scenarios are errors, because only an observed failure proves the test can fail). Writes `.ekit/ledger/<feature>.yaml` with git HEAD and a sha256 fingerprint of the feature files and the test modules bound to them.
 - **green**: red was recorded first for every scenario (a ledger status of `failed`); the feature files and bound test modules are unchanged since red (`GREEN-TESTS-UNCHANGED`); all scenarios pass and the suites exit 0 (no regressions); unit, lint, coverage pass; SCA and unchecked tasks warn.
@@ -167,6 +167,11 @@ edit, write and patch tools:
 | `.ekit/*`, `opencode.json`, `.opencode/*` | `ekit init`, `sync`, `upgrade` | never (humans edit these outside the agent) |
 | `specs/<feature>/features/*` and the test modules bound to the feature | `ekit gate red` passes | `ekit unfreeze <feature> --reason "..."` |
 
+Since 0.2.0 ekit also owns `permission.bash` deny rules for the commands that record a person's decision:
+`ekit unfreeze`, `ekit upgrade`, `ekit wave approve|advance|decline` and `ekit models …`. The agent's shell
+tool cannot run them; it tells the user the command instead. Running them through another wrapper
+(`uv run ekit …`, a script) is not covered, and the records they write name who acted.
+
 State is `.ekit/freeze.yaml` (commit it): the frozen paths and a history of every unfreeze with reason, who and
 when. Your own rules and settings in `opencode.json` are kept; ekit rewrites only the rules it owns, after the
 catch-all, because OpenCode applies the last matching rule. `ekit status` shows a `frozen` column,
@@ -210,6 +215,45 @@ All Python commands run through `uv run --locked`, so the global interpreter is 
 `pyproject.toml`/`uv.lock` mismatch fails instead of silently re-resolving. You never need to
 activate the venv. `ekit init` adds the environment folders to `.gitignore`.
 
+## Optional: waves (deliver as several MVPs)
+
+Off unless you turn it on. A product can be delivered in **waves**: W1 shows the overall face of the
+system (shell, sign-in, one working happy path per major feature, minimal frontend and backend), later
+waves deepen it, and new BRDs are placed into waves as they arrive.
+
+- Planned per acceptance criterion: `loan:AC-012`, or `loan:FEAT-03` for all of a feature's ACs. A wave
+  slice of a feature becomes its own Spec Kit feature folder, so frozen tests and the ledger work as before.
+- `ekit wave init` writes a proposal (`docs/planning/waves.proposed.yaml`) with every AC in W1. People
+  (and the agent, as a helper) move scope into later waves and add deferrals with a reason and approver.
+- A person approves: `ekit wave approve --by "Head of Product"` validates the proposal and writes
+  `.ekit/waves.yaml`, listing every AC explicitly. Every AC of every PRD must be in exactly one wave, so the
+  ACs of a new or changed BRD have to be placed before they can be specified.
+- `ekit wave advance --by NAME` moves to the next wave once every AC of the current one has a green feature
+  (`--carry` moves unfinished ACs on, recorded). Deferred NFRs of the new wave become required.
+- Gates: `spec` refuses ACs of a later wave; `Deferred (W2)` is accepted only while W2 is in the future and
+  never for the non-deferrable NFRs in `policy/waves.policy.yaml`; profiles not active in the current wave
+  (e.g. a backend-only W1) are skipped and named in every gate report.
+- `ekit wave decline` records that the project does not use waves, so the BRD command stops asking.
+
+## Optional: model tiers
+
+Off unless you turn it on. The kit routes each OpenCode command and agent to a **tier**
+(`policy/models.policy.yaml`); the project picks the model for each tier with `ekit models setup`
+(`.ekit/models.yaml`).
+
+| Tier | Commands |
+|---|---|
+| flagship | `/speckit.esdlc.brd`, `/speckit.constitution`, `/speckit.esdlc.baseline`, `/speckit.plan`, `/speckit.esdlc.red`; agents `requirements-analyst`, `test-author` |
+| standard | `/speckit.specify`, `/speckit.clarify`, `/speckit.esdlc.questions`, `/speckit.esdlc.gherkin`, `/speckit.tasks`, `/speckit.implement`, `/speckit.analyze`, `/speckit.checklist` |
+| light | OpenCode `small_model` |
+
+ekit writes `model:` into the command and agent frontmatter (OpenCode's per-command override) and a banner
+so the agent starts each routed command with `[ekit] tier: flagship · model: <id>`. `ekit sync` re-applies it
+after Spec Kit regenerates command files; `ekit doctor` reports files where it is missing. Red and green
+ledger entries record `model_tier` and `model_configured`: the configured model, not proof of the one that
+ran (the OpenCode UI can still switch models). A temporary downgrade goes in `overrides:` with `reason`,
+`approved_by` and `expires`. `ekit models off` removes everything ekit wrote.
+
 ## Useful commands
 
 ```
@@ -222,6 +266,8 @@ ekit freeze [feature]        # re-apply edit protection for a red feature (gate 
 ekit unfreeze [feature] --reason "..."   # lift it, audited in .ekit/freeze.yaml
 ekit upgrade --source git+https://…@v0.3.0
 EKIT_REQUIRE_PINNED_CLI=1 ekit gate green   # CI: refuse to judge with a CLI other than the pinned one
+ekit wave [status|init|validate|scope FEAT-xx]   # optional waves (approve / advance / decline: a person)
+ekit models [show|setup|off]                     # optional model tiers (a person)
 ```
 
 ## Adding a stack
@@ -238,16 +284,17 @@ Regulatory overlays (MVP2) slot in the same way: extra NFRs under `overlays:` pl
 ## Repository layout
 
 ```
-src/ekit/                 CLI (gates, checks, kit source, installer, questions)
+src/ekit/                 CLI (gates, checks, kit source, installer, questions, waves, models)
 src/ekit/kit/             the kit itself (this is what gets vendored into projects)
   kit.yaml                manifest: stacks, components, version
   baseline/               NFR catalogue
   profiles/               stack profiles
-  policy/                 gate policy
+  policy/                 gate policy, wave policy, model routing policy
   extension/esdlc/        Spec Kit extension (commands + templates)
   preset/enterprise-baseline/  Spec Kit preset (template appends + command wraps)
   opencode/               AGENTS.md block + agents
 tests/                    unit tests (pytest)
+docs/design/              design notes per release
 ```
 
 ## Versions
@@ -258,6 +305,7 @@ tests/                    unit tests (pytest)
 | 0.1.2 | 0.1.3 | `RED-STEPS-ASSERT`, `GREEN-TESTS-UNCHANGED`, clearer undefined-step messages, feature lookup in command text, agent rules to extend (never rewrite) the landing zone and not edit frozen tests. The kit declares `requires.ekit >= 0.1.2`; an older CLI refuses it. |
 | 0.1.3 | 0.1.4 | Edit protection: ekit-managed `permission.edit` deny rules in `opencode.json`, `ekit freeze` / `unfreeze`, `frozen` column in `status`, doctor check. Requires `ekit >= 0.1.3`. |
 | 0.1.5 | 0.1.6 | Governance fixes found by validating the quiz against the code: `RED-RUN` rejects skipped scenarios and `ledger.red_first` counts only `failed` entries; `Waived` needs a real ADR reference (a date such as `2026-12` no longer satisfies it); overrides need `reason`, `approved_by` and `expires`; a blocking question answered without `answered_by` fails `ready` (and `intake`) and is refused by `questions import`. Requires `ekit >=0.1.5,<0.2`. |
+| 0.2.0 | 0.2.0 | Optional **waves** (`ekit wave …`, `.ekit/waves.yaml`, AC-level scope, `SPEC-WAVE-SCOPE`, `Deferred (Wn)`, non-deferrable NFRs, inactive profiles skipped) and optional **model tiers** (`ekit models …`, red on flagship by default, frontmatter injection on sync, ledger records the configured model). Approval commands denied to the agent's shell tool. Both features are off unless configured. Requires `ekit >=0.2.0,<0.3`. Design: `docs/design/0.2.0-waves-and-model-tiers.md`. |
 | 0.1.4 | 0.1.5 | CLI version pinning: `kit.lock.yaml` records the CLI version (`ekit.version`); `doctor` fails on a mismatch, `status` and every gate report show it, `EKIT_REQUIRE_PINNED_CLI=1` makes gates refuse to run with another CLI; red/green ledger entries record `ekit_version`; `requires.ekit` accepts ranges (`>=0.1.4,<0.2`, also `>`, `<=`, `==`) and the kit declares an upper bound. Requires `ekit >=0.1.4,<0.2`. |
 
 Upgrade: `uv tool install --reinstall ./enterprise-sdd-kit` (or `--force git+…@<tag>`), then in each project
@@ -269,6 +317,9 @@ applying, `Waived` rows that cite only a date fail, and a feature whose red ledg
 `failed` must be taken back to red (`ekit unfreeze … --reason`, stubs, `ekit gate red`). Run `ekit gate all`
 after `ekit upgrade` and fix what it reports in the same reviewed change.
 
+Moving to 0.2.0 changes nothing for projects that use neither waves nor model tiers, except that
+`opencode.json` gains the `permission.bash` deny rules (restart OpenCode after `ekit upgrade`).
+
 ## Status of MVP1
 
 Verified against Spec Kit 1.2.7 (source build) on Linux: greenfield `init`, brownfield `adopt`,
@@ -278,3 +329,7 @@ round-trip, overrides, tamper detection, upgrade. Exercised on macOS by a real u
 FastAPI + pytest-bdd (which found the tag-format and empty-step gaps fixed in 0.1.1 and 0.1.2). Not yet
 exercised: Windows hosts, the Spring Boot and React toolchains, and agent output quality on smaller models,
 which can loop or rewrite baseline code; the gates catch it, they do not prevent it.
+
+0.2.0 (waves, model tiers) is covered by unit and CLI tests but has not yet been run against a live Spec Kit +
+OpenCode install: confirm on the first project that Spec Kit writes its OpenCode commands to `.opencode/commands/`
+(or `.opencode/command/`) and that `ekit models show` lists them without "(no file under .opencode/)".

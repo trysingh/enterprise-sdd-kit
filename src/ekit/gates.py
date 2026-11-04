@@ -86,6 +86,25 @@ def load_overrides(project: Project) -> tuple[dict[str, Any], list[str]]:
     return valid, notes
 
 
+def wave_notes(project: Project) -> list[str]:
+    """With an approved wave plan, every report says which wave is current and what it skips."""
+    plan = getattr(project, "wave_plan", None)
+    if plan is None:
+        return []
+    from .waves import catalog_ids, validate
+    notes = [f"waves: current {plan.current} of {', '.join(plan.ids)} (.ekit/waves.yaml, approved by "
+             f"{plan.data.get('approved_by') or '?'} on {plan.data.get('approved_on') or '?'})"]
+    inactive = project.inactive_profiles
+    if inactive:
+        notes.append(f"not active in {plan.current}: {', '.join(p.id for p in inactive)}. Their commands, paths, "
+                     "environment and BDD runs are skipped, and NFRs that apply only to them are not required yet")
+    errors, _ = validate(plan, project.kit, catalog_ids(project.kit))
+    if errors:
+        notes.append(f"the approved wave plan is no longer valid ({len(errors)} problem(s), e.g. {errors[0]}); "
+                     "run `ekit wave validate`")
+    return notes
+
+
 def _subst(value: Any, mapping: dict[str, str]) -> Any:
     if isinstance(value, str):
         return re.sub(r"\{(feature_dir|prd_dir)\}", lambda m: mapping.get(m.group(1), m.group(0)), value)
@@ -112,6 +131,7 @@ def run_gate(
     pin = cli_pin(project.root)
     if not pin.matches:
         notes.insert(0, pin.message())
+    notes += wave_notes(project)
 
     ctx = GateContext(project=project)
     kind = gate.get("context", "project")
