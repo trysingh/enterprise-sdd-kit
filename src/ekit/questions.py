@@ -59,8 +59,12 @@ def import_csv(prd_dir: Path, src: Path) -> list[str]:
             if not answer:
                 continue
             q = by_id[qid]
+            who = (row.get("answered_by") or "").strip() or str(q.get("answered_by") or "").strip()
+            if q.get("blocking") and not who:
+                raise EkitError(f"CSV row {qid} answers a blocking question but `answered_by` is empty — "
+                                "refusing partial import. Ask the stakeholder who decided.")
             q["answer"] = answer
-            q["answered_by"] = (row.get("answered_by") or "").strip() or q.get("answered_by")
+            q["answered_by"] = who or None
             q["answered_on"] = (row.get("answered_on") or "").strip() or dt.date.today().isoformat()
             status = (row.get("status") or "").strip().lower()
             q["status"] = status if status in ("answered", "deferred", "withdrawn") else "answered"

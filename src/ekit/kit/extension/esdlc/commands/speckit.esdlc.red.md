@@ -17,6 +17,11 @@ run. You do **not** implement business behaviour.
 $ARGUMENTS
 ```
 
+## Active feature
+
+Use the feature named in `$ARGUMENTS` (`001-user-admin`, `001`). If none is named, run `ekit status`
+and take the one feature whose `scen` column is `ok` and `red` is `--`; if several qualify, ask once which.
+
 ## Steps
 
 1. `ekit context` for the stack's `bdd.binding`, test layout and `agent_rules`.
@@ -24,6 +29,10 @@ $ARGUMENTS
 2. Write step definitions for every step of every scenario in this feature, following the
    profile binding (pytest-bdd modules / Cucumber-JVM glue / cucumber-js steps). Steps call the
    system through its public interface (HTTP API or browser), never internals.
+   Every step must set up state (`Given`), act (`When`) or assert observable behaviour (`Then`).
+   A body of `pass`, `...` or a comment is rejected by the gate (`RED-STEPS-ASSERT`): a `Then` that cannot fail
+   lets the scenario go green with the wrong behaviour. Build feature paths from the test file's own location,
+   never absolute paths.
 3. Allowed production changes: only what makes the tests **compile and run** — empty routes or
    controllers returning 501, interfaces, DTO/record shells, DB migration stubs. No business
    logic, no happy-path behaviour.
@@ -33,7 +42,10 @@ $ARGUMENTS
    the new behaviour — fix the test. If one is missing or undefined, bind it.
    Failures must be assertion failures or 501/404 responses, not compile errors or crashes in
    the harness itself.
-6. Commit the tests (suggested message: `test(<NNN>): red for SCN-...`). The gate has written
+6. When the gate passes, `ekit` freezes the feature files and bound tests against agent edits (`opencode.json`
+   deny rules). Tell the user: restart OpenCode before the next step so the freeze is applied. A wrong test
+   is lifted only by the user with `ekit unfreeze <feature> --reason "..."`.
+7. Commit the tests (suggested message: `test(<NNN>): red for SCN-...`). The gate has written
    a ledger entry under `.ekit/ledger/`; commit it too — it is the evidence that tests came
    first.
-7. Hand off to `__SPECKIT_COMMAND_IMPLEMENT__`.
+8. Hand off to `__SPECKIT_COMMAND_IMPLEMENT__`.

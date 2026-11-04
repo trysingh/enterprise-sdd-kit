@@ -7,13 +7,14 @@ engine downgrades "error" to "warn" when the policy (or an override) sets severi
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from . import gherkin
-from .project import Project, dump_yaml, git, load_yaml
+from . import gherkin, stepscan
+from .project import EkitError, Project, dump_yaml, git, load_yaml
 from .runner import run_profile_command
 
 
@@ -228,7 +229,9 @@ def questions_valid(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
         if q.get("status") == "answered" and not str(q.get("answer") or "").strip():
             out.append(Finding("error", f"{where}: answered but no answer recorded"))
         if q.get("status") == "answered" and not str(q.get("answered_by") or "").strip():
-            out.append(Finding("warn", f"{where}: answered_by is empty (who decided?)"))
+            # a blocking answer changes scope or acceptance criteria: the accountable owner must be named
+            level = "error" if q.get("blocking") is True else "warn"
+            out.append(Finding(level, f"{where}: answered_by is empty (who decided?)"))
     return out
 
 
@@ -242,12 +245,17 @@ def no_open_blocking(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
         if q.get("blocking") and q.get("status") in ("open", "deferred"):
             owner = q.get("owner") or "unassigned"
             out.append(Finding("error", f"{q.get('id')} [{q.get('status')}, owner: {owner}] {str(q.get('question', '')).strip()[:140]}"))
+        elif q.get("blocking") and q.get("status") == "answered" and not str(q.get("answered_by") or "").strip():
+            out.append(Finding("error", f"{q.get('id')}: blocking question answered without `answered_by`; record who decided"))
         elif q.get("status") == "open":
             out.append(Finding("info", f"{q.get('id')} open (non-blocking)"))
     return out
 
 
 # ------------------------------------------------------------------------- NFR conformance
+# An ADR reference: "ADR-0007", "ADR 7" or a file under docs/adr/ ("docs/adr/0007-x.md", "adr/0007-x.md").
+# A bare date such as "2026-12" is NOT an ADR reference.
+ADR_REF_RE = re.compile(r"\bADR[- ]?\d+\b|\badr/\d{4}-", re.IGNORECASE)
 ROW_RE = re.compile(r"^\s*\|\s*`?([A-Z]{2,5}-\d{2})`?\s*\|(.*)\|\s*$")
 
 
@@ -286,7 +294,7 @@ def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             continue
         if not row["evidence"] or row["evidence"].startswith("["):
             out.append(Finding("error", f"{nid}: '{status}' needs evidence or justification"))
-        if status == "Waived" and not re.search(r"ADR-?\d+|\d{4}-", row["adr"] + " " + row["evidence"]):
+        if status == "Waived" and not ADR_REF_RE.search(row["adr"] + " " + row["evidence"]):
             out.append(Finding("error", f"{nid}: Waived requires an ADR reference (e.g. ADR-0007)"))
     known = {n["id"] for n in catalog.get("nfrs", [])}
     for nid in rows:
@@ -384,6 +392,11 @@ def ac_covered(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 
 
 # ------------------------------------------------------------------------- BDD / ledger
+def _ekit_version() -> str:
+    from . import __version__
+    return __version__
+
+
 def _ledger_path(ctx: GateContext) -> Path:
     assert ctx.feature_dir is not None
     return ctx.project.root / ".ekit" / "ledger" / f"{ctx.feature_dir.name}.yaml"
@@ -395,6 +408,115 @@ def _feature_scn_ids(ctx: GateContext, d: str) -> list[str]:
     for s in scenarios:
         ids.extend(gherkin.scn_tags(s.tags))
     return sorted(set(ids))
+
+
+# ---------------------------------------------------- frozen tests and empty-step scan
+_TEST_SUFFIXES = {".py", ".java", ".kt", ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx"}
+
+
+def _rel_posix(ctx: GateContext, p: Path) -> str:
+    try:
+        return p.resolve().relative_to(ctx.project.root.resolve()).as_posix()
+    except ValueError:
+        return p.as_posix()
+
+
+def _bdd_dirs(prof: Any) -> list[Path]:
+    rel = (prof.data.get("layout") or {}).get("acceptance_tests")
+    if not rel:
+        return []
+    if any(c in rel for c in "*?["):
+        return sorted(p for p in prof.root.glob(rel) if p.is_dir())
+    p = prof.root / rel
+    return [p] if p.is_dir() else []
+
+
+def _test_files(prof: Any) -> list[Path]:
+    out: list[Path] = []
+    for d in _bdd_dirs(prof):
+        for f in sorted(d.rglob("*")):
+            if f.is_file() and f.suffix in _TEST_SUFFIXES and not {"__pycache__", "node_modules"} & set(f.parts):
+                out.append(f)
+    return out
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _feature_bound_tests(ctx: GateContext, d: str) -> list[Path]:
+    """Acceptance test modules that bind this feature: they mention one of its .feature file names
+    or one of its @SCN-<NNN>- ids. (Cucumber glue that binds nothing by name is not covered.)"""
+    needles = {f.name for f in ctx.path(d).rglob("*.feature")}
+    if ctx.feature_number:
+        needles.add(f"SCN-{ctx.feature_number}-")
+    found: set[Path] = set()
+    for prof in ctx.project.profiles:
+        if not prof.runs_bdd:
+            continue
+        for tf in _test_files(prof):
+            text = tf.read_text(encoding="utf-8", errors="replace")
+            if any(n in text for n in needles):
+                found.add(tf)
+    return sorted(found)
+
+
+def _frozen_files(ctx: GateContext, d: str) -> list[Path]:
+    return sorted(set(ctx.path(d).rglob("*.feature")) | set(_feature_bound_tests(ctx, d)))
+
+
+@check("bdd.vacuous_steps")
+def vacuous_steps(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Every step must set up or check something. Static scan, implemented for pytest-bdd."""
+    out: list[Finding] = []
+    for prof in ctx.project.profiles:
+        if not prof.runs_bdd:
+            continue
+        fw = prof.bdd.get("framework")
+        if fw != "pytest-bdd":
+            out.append(Finding("info", f"[{prof.id}] empty-step scan is not implemented for {fw}: review step definitions for empty bodies by hand"))
+            continue
+        files = set(_feature_bound_tests(ctx, w["dir"])) | {f for f in _test_files(prof) if f.name == "conftest.py"}
+        for f in sorted(files):
+            if f.suffix != ".py":
+                continue
+            rel = _rel_posix(ctx, f)
+            res = stepscan.scan_source(f.read_text(encoding="utf-8", errors="replace"))
+            if res.error:
+                out.append(Finding("error", f"{rel}: {res.error}"))
+            for i in res.steps:
+                label = f"step {i.step!r} " if i.step else ""
+                out.append(Finding("error", f"{rel}:{i.line} {label}({i.name}): {i.reason}. Make it set up state or assert behaviour through the public interface; a deliberate no-op needs `# ekit: allow-empty-step <reason>`"))
+            for line, p in res.abs_paths:
+                out.append(Finding("error", f"{rel}:{line} absolute feature path {p!r} breaks on every other machine and in CI: build it from Path(__file__)"))
+    return out
+
+
+@check("ledger.tests_unchanged")
+def tests_unchanged(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Red tests are frozen: the .feature files and bound test modules must be byte-identical
+    (CRLF-normalised) to what the last red entry fingerprinted."""
+    ledger = _ledger_path(ctx)
+    if not ledger.is_file():
+        return []  # ledger.red_first reports the missing ledger
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red"]
+    if not reds:
+        return []
+    fp = reds[-1].get("fingerprints")
+    if not fp:
+        return [Finding("warn", "the red entry has no file fingerprints (recorded by an older ekit): re-run `ekit gate red` while the code is still red to freeze the tests")]
+    out: list[Finding] = []
+    for rel, sha in sorted(fp.items()):
+        f = ctx.project.root / rel
+        if not f.is_file():
+            out.append(Finding("error", f"{rel}: deleted since red was recorded"))
+        elif _sha(f) != sha:
+            out.append(Finding("error", f"{rel}: changed since red was recorded. Red tests are frozen: restore the file from the commit that added {ctx.project.rel(ledger)}, or `ekit unfreeze {ctx.feature_dir.name} --reason ...` and go back to red. A reviewed exception needs an override for this check id"))
+    for f in _frozen_files(ctx, w["dir"]):
+        rel = _rel_posix(ctx, f)
+        if rel not in fp:
+            out.append(Finding("warn", f"{rel}: bound to this feature but added after red was recorded"))
+    return out
 
 
 @check("bdd.run")
@@ -423,16 +545,28 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
         reports.append(report)
     results = gherkin.read_cucumber_reports(reports)
     status = {sid: gherkin.aggregate(results[sid]) for sid in want if sid in results}
+    pytest_bdd = any(p.bdd.get("framework") == "pytest-bdd" for p in runners)
     for sid in want:
         if sid not in status:
-            out.append(Finding("error", f"{sid}: not executed by any runner (check feature path / tag filters in the BDD config)"))
+            msg = f"{sid}: not executed by any runner (check feature path / tag filters in the BDD config)"
+            if pytest_bdd:
+                msg = (f"{sid}: not in the test report. Either no test module binds its feature file, or its first step has no "
+                       "step definition (pytest-bdd leaves such a scenario out of its report; the pytest output shows "
+                       "StepDefinitionNotFoundError), or the module fails before the first step")
+            out.append(Finding("error", msg))
             continue
         st = status[sid]
         if expect == "red":
             if st == "passed":
-                out.append(Finding("error", f"{sid}: PASSES before implementation — the test does not test the new behaviour"))
+                msg = f"{sid}: PASSES before implementation — the test does not test the new behaviour"
+                if pytest_bdd:
+                    msg += " (if pytest also shows StepDefinitionNotFoundError for it, a later step has no definition: pytest-bdd records such a scenario as passed)"
+                out.append(Finding("error", msg))
             elif st in ("undefined", "pending", "ambiguous"):
                 out.append(Finding("error", f"{sid}: {st} — bind every step before recording red"))
+            elif st != "failed":
+                # e.g. 'skipped' (a @skip tag, a skip marker, a tag filter): not evidence that the test can fail
+                out.append(Finding("error", f"{sid}: {st} — red needs the scenario to run and FAIL; remove the skip or tag filter"))
         else:
             if st != "passed":
                 out.append(Finding("error", f"{sid}: {st}"))
@@ -442,16 +576,28 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
                 out.append(Finding("error", f"[{pid}] acceptance suite exited {rc} (another scenario or a regression is failing)"))
     if w.get("record") and not any(f.level == "error" for f in out):
         ledger = _ledger_path(ctx)
+        fingerprints = {_rel_posix(ctx, f): _sha(f) for f in _frozen_files(ctx, w["dir"])}
         data = load_yaml(ledger) if ledger.is_file() else {"feature": ctx.feature_dir.name, "entries": []}
         data.setdefault("entries", []).append({
             "phase": expect,
             "at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
             "git_head": git(ctx.project.root, "rev-parse", "HEAD"),
             "kit_version": ctx.project.kit.version,
+            "ekit_version": _ekit_version(),   # the CLI holds the check logic that produced this verdict
             "scenarios": {sid: status[sid] for sid in want},
+            # sha256 of the feature files and bound test modules at this moment; `ledger.tests_unchanged` compares
+            "fingerprints": fingerprints,
         })
         dump_yaml(data, ledger)
         out.append(Finding("info", f"recorded {expect} for {len(want)} scenario(s) in {ctx.project.rel(ledger)}"))
+        if expect == "red":
+            from . import freeze
+            try:
+                rules = freeze.freeze_feature(ctx.project.root, ctx.feature_dir.name, fingerprints)
+                out.append(Finding("info", f"froze {len(fingerprints)} file(s) against agent edits in opencode.json ({len(rules)} deny rules); "
+                                           f"restart OpenCode to apply; lift with `ekit unfreeze {ctx.feature_dir.name} --reason \"...\"`"))
+            except EkitError as exc:
+                out.append(Finding("warn", f"could not freeze the red tests in opencode.json: {exc}"))
     return out
 
 
@@ -469,7 +615,7 @@ def red_first(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             continue
         heads.append(e.get("git_head"))
         for sid, st in (e.get("scenarios") or {}).items():
-            if st != "passed":
+            if st == "failed":          # only an observed failure proves test-first (not skipped/pending)
                 red_ok.add(sid)
     out = [Finding("error", f"{sid}: never recorded failing (red) before green") for sid in want if sid not in red_ok]
     head = git(ctx.project.root, "rev-parse", "HEAD")

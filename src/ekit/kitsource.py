@@ -93,11 +93,16 @@ def vendor(project_root: Path, src: ResolvedSource) -> dict:
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(src.kit_path, target, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
+    from . import __version__
+
     lock = {
         "apiVersion": "ekit/v1",
         "kind": "KitLock",
         "source": {"kind": src.kind, "location": src.location, "ref": src.ref, "commit": src.commit},
         "kit": {"name": kit.manifest.get("metadata", {}).get("name"), "version": kit.version},
+        # The CLI holds the check logic, so it is part of what a gate result depends on.
+        # Everyone (and CI) should run this version; `ekit doctor` and every gate compare against it.
+        "ekit": {"version": __version__},
         "sha256": digest(target),
         "vendored_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
     }
@@ -108,6 +113,35 @@ def vendor(project_root: Path, src: ResolvedSource) -> dict:
 def read_lock(project_root: Path) -> dict | None:
     p = project_root / EKIT_DIR / LOCK_FILE
     return load_yaml(p) if p.is_file() else None
+
+
+STRICT_ENV = "EKIT_REQUIRE_PINNED_CLI"
+
+
+@dataclass
+class CliPin:
+    pinned: str | None   # CLI version recorded in kit.lock.yaml (None: lock written by ekit < 0.1.4, or no lock)
+    current: str         # CLI version running now
+
+    @property
+    def matches(self) -> bool:
+        return self.pinned is not None and self.pinned == self.current
+
+    def message(self) -> str:
+        if self.pinned is None:
+            return (f"kit.lock.yaml does not record an ekit CLI version (vendored by ekit < 0.1.4); "
+                    f"this is ekit {self.current}. Run `ekit upgrade` once to record it")
+        return (f"this is ekit {self.current} but the project pins ekit {self.pinned} in kit.lock.yaml; "
+                f"gate results can differ from teammates and CI. Install {self.pinned}, "
+                f"or run `ekit upgrade` to move the whole team to {self.current}")
+
+
+def cli_pin(project_root: Path) -> CliPin:
+    from . import __version__
+
+    lock = read_lock(project_root) or {}
+    pinned = (lock.get("ekit") or {}).get("version")
+    return CliPin(str(pinned) if pinned else None, __version__)
 
 
 def source_string(lock: dict) -> str:

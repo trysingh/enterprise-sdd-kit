@@ -107,6 +107,12 @@ def _scenario_status(element: dict) -> str:
     return "skipped"
 
 
+def _at(tag: str) -> str:
+    """Cucumber-JVM / cucumber-js write tag names as '@SCN-001-01'; pytest-bdd strips the '@'.
+    Normalise so one reader serves every runner."""
+    return tag if tag.startswith("@") else f"@{tag}"
+
+
 def read_cucumber_reports(paths: list[Path]) -> dict[str, list[str]]:
     """Return {SCN-id: [status per executed example]} merged across reports."""
     result: dict[str, list[str]] = {}
@@ -118,11 +124,11 @@ def read_cucumber_reports(paths: list[Path]) -> dict[str, list[str]]:
         except json.JSONDecodeError:
             continue
         for feature in data if isinstance(data, list) else []:
-            ftags = [t.get("name", "") for t in feature.get("tags", [])]
+            ftags = [_at(t.get("name", "")) for t in feature.get("tags", [])]
             for el in feature.get("elements", []):
                 if el.get("type") == "background" or el.get("keyword", "").strip().lower() == "background":
                     continue
-                tags = ftags + [t.get("name", "") for t in el.get("tags", [])]
+                tags = ftags + [_at(t.get("name", "")) for t in el.get("tags", [])]
                 for scn in scn_tags(tags, r"SCN-\d{3}-\d{2}"):
                     result.setdefault(scn, []).append(_scenario_status(el))
     return result

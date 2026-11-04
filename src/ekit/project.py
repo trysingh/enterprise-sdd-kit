@@ -23,6 +23,35 @@ class EkitError(Exception):
     """User-facing error: printed without a traceback."""
 
 
+def parse_version(s: str) -> tuple[int, int, int]:
+    """'0.1' -> (0, 1, 0); '0.1.4' -> (0, 1, 4). Pre-release suffixes are not supported."""
+    parts = str(s).strip().lstrip("v").split(".")
+    if not 1 <= len(parts) <= 3 or not all(p.isdigit() for p in parts):
+        raise EkitError(f"Not a version number: {s!r} (expected x, x.y or x.y.z)")
+    nums = [int(p) for p in parts] + [0, 0]
+    return nums[0], nums[1], nums[2]
+
+
+_CONSTRAINT_RE = re.compile(r"^\s*(>=|<=|==|>|<)\s*([0-9][0-9.]*)\s*$")
+
+
+def unmet_constraints(version: str, spec: str) -> list[str]:
+    """Return the parts of a comma-separated spec like '>=0.1.4,<0.2' that `version` does not meet."""
+    have = parse_version(version)
+    failed = []
+    for raw in spec.split(","):
+        if not raw.strip():
+            continue
+        m = _CONSTRAINT_RE.match(raw)
+        if not m:
+            raise EkitError(f"Unsupported version constraint {raw.strip()!r} in {spec!r} (use >=, >, <=, <, ==)")
+        op, want = m.group(1), parse_version(m.group(2))
+        ok = {">=": have >= want, ">": have > want, "<=": have <= want, "<": have < want, "==": have == want}[op]
+        if not ok:
+            failed.append(f"{op}{m.group(2)}")
+    return failed
+
+
 def load_yaml(path: Path) -> Any:
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -97,7 +126,29 @@ class Kit:
         manifest_path = path / "kit.yaml"
         if not manifest_path.is_file():
             raise EkitError(f"No kit.yaml in {path}; not a valid kit source.")
-        return cls(path=path, manifest=load_yaml(manifest_path))
+        kit = cls(path=path, manifest=load_yaml(manifest_path))
+        kit.check_requirements()
+        return kit
+
+    def check_requirements(self) -> None:
+        """A kit declares which ekit CLI versions may run it, e.g. `>=0.1.4,<0.2`.
+
+        The lower bound exists because a newer kit may use check types an older CLI lacks.
+        The upper bound exists because the CLI holds the check logic: a much newer CLI can
+        judge the same pinned rules differently. Supported operators: >=, >, <=, <, ==.
+        """
+        from . import __version__
+
+        req = str((self.manifest.get("requires") or {}).get("ekit") or "").strip()
+        if not req:
+            return
+        failed = unmet_constraints(__version__, req)
+        if failed:
+            raise EkitError(
+                f"Kit {self.version} requires ekit {req} but this is ekit {__version__} "
+                f"(not {', '.join(failed)}). Install a matching CLI, e.g. "
+                "`uv tool install --force git+<kit-repo>@<tag>` or `uv tool install --reinstall <path-to-enterprise-sdd-kit>`."
+            )
 
     @property
     def version(self) -> str:

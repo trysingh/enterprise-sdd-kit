@@ -96,3 +96,6 @@ agent_rules: |
   - Errors: domain exceptions mapped to ProblemDetail in a single @RestControllerAdvice.
   - Acceptance tests: Cucumber glue in <base>.acceptance with @CucumberContextConfiguration + @SpringBootTest(webEnvironment=RANDOM_PORT); features read from specs/ via junit-platform.properties.
   - Always run the Maven wrapper ({mvnw}); never assume a global Maven.
+  - Step definitions: every step sets up state or asserts observable behaviour; no empty step methods.
+  - Landing zone (extend, never rewrite): modules created by the baseline (settings, logging, errors, security, health, app wiring) and their tests may only be extended. Never delete or replace existing behaviour in them; the `SCN-000-*` smoke scenario and the baseline unit tests must stay green. Add new code in new modules and wire it in.
+  - Frozen tests: once `ekit gate red` has recorded a feature, its `.feature` files and bound acceptance tests are frozen (`GREEN-TESTS-UNCHANGED` fails on any change). If a test is wrong, stop and report it instead of editing it.

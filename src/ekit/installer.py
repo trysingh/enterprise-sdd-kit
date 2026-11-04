@@ -143,7 +143,8 @@ def install_opencode_assets(project: Project) -> None:
 # --------------------------------------------------------------------------- scaffolding
 OVERRIDES_SAMPLE = """\
 # Project-level relaxations of the kit gate policy. Reviewed in pull requests.
-# Every entry needs a reason; `expires` (YYYY-MM-DD) is strongly recommended.
+# Every entry needs `reason`, `approved_by` and `expires` (YYYY-MM-DD); otherwise it is ignored
+# and the gate report says why. Expired entries stop applying by themselves.
 #
 # overrides:
 #   GREEN-SCA:
@@ -154,6 +155,8 @@ OVERRIDES_SAMPLE = """\
 #   BASE-LINT:
 #     enabled: false
 #     reason: "Brownfield: lint debt tracked in ADR-0004"
+#     approved_by: "Tech Lead"
+#     expires: 2026-12-31
 overrides: {}
 """
 
@@ -267,6 +270,7 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
     say("\n==> OpenCode rules and agents")
     install_opencode_assets(project)
     scaffold(project)
+    apply_edit_protection(project)
     next_steps(project)
     return root
 
@@ -278,6 +282,16 @@ def sync(project: Project) -> None:
     install_speckit_components(project)
     install_opencode_assets(project)
     scaffold(project)
+    apply_edit_protection(project)
+
+
+def apply_edit_protection(project: Project) -> None:
+    from . import freeze
+    try:
+        rules = freeze.sync_permissions(project.root)
+        say(f"  opencode.json: {len(rules)} deny rule(s) protect ekit/OpenCode wiring and frozen tests from agent edits")
+    except EkitError as exc:
+        say(f"  !! edit protection not applied: {exc}")
 
 
 def _preset_installed(project: Project) -> bool:
@@ -294,7 +308,12 @@ def upgrade(root: Path, source: str | None) -> None:
         new_lock = kitsource.vendor(root, src)
     finally:
         src.cleanup()
+    old_cli = (lock.get("ekit") or {}).get("version") or "not recorded"
     say(f"Kit {old} -> {new_lock['kit']['version']} from {kitsource.source_string(new_lock)}")
+    say(f"ekit CLI pin {old_cli} -> {new_lock['ekit']['version']}: everyone, and CI, must now run this CLI version")
+    if new_lock["source"]["kind"] == "bundled":
+        say("  note: source 'bundled' means the kit shipped inside the CLI you are running now, "
+            "so the CLI version also decides the kit version")
     sync(Project.load(root))
 
 
@@ -338,11 +357,18 @@ def doctor(project: Project | None) -> int:
         actual = kitsource.digest(project.root / ".ekit" / "kit")
         row(actual == lock.get("sha256"), "kit integrity",
             "matches lock" if actual == lock.get("sha256") else "kit files changed since vendoring; run `ekit upgrade` or revert")
+        pin = kitsource.cli_pin(project.root)
+        row(pin.matches, "ekit CLI matches the project pin",
+            f"ekit {pin.current}" if pin.matches else pin.message())
     else:
         row(False, "kit lock", "missing .ekit/kit.lock.yaml")
     row(DEFAULT_INTEGRATION in installed_integrations(project.root), "opencode integration")
     row((project.root / ".specify" / "extensions" / "esdlc").is_dir(), "esdlc extension")
     row(_preset_installed(project), "enterprise-baseline preset")
+    say("\nEdit protection (opencode.json)")
+    from . import freeze
+    for ok, label, detail in freeze.verify(project.root):
+        row(ok, label, detail)
     say(f"\nEnvironments (ENV-01)")
     from .checks import venv_python_version  # local import keeps installer light
     for prof in project.profiles:

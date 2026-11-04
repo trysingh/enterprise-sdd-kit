@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,25 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_freeze(args: argparse.Namespace) -> int:
+    from . import freeze
+    project = Project.load()
+    feature = project.resolve_feature(args.feature).name
+    rules = freeze.freeze_from_ledger(project.root, feature)
+    print(f"{feature} frozen: {len(rules)} deny rule(s) in opencode.json. Restart OpenCode to apply.")
+    return 0
+
+
+def cmd_unfreeze(args: argparse.Namespace) -> int:
+    from . import freeze
+    project = Project.load()
+    feature = project.resolve_feature(args.feature).name
+    freeze.unfreeze_feature(project.root, feature, args.reason)
+    print(f"{feature} unfrozen (recorded in .ekit/freeze.yaml). Restart OpenCode to apply.\n"
+          f"Fix the tests, then run `ekit gate red` while the code is still red: it records new fingerprints and freezes again.")
+    return 0
+
+
 def cmd_stacks(args: argparse.Namespace) -> int:
     src = kitsource.resolve(args.source or "bundled")
     try:
@@ -53,8 +73,18 @@ def cmd_stacks(args: argparse.Namespace) -> int:
     return 0
 
 
+def require_pinned_cli(project: Project) -> None:
+    """With EKIT_REQUIRE_PINNED_CLI=1 (set it in CI), refuse to judge with a CLI other than the pinned one."""
+    if os.environ.get(kitsource.STRICT_ENV, "").strip().lower() not in ("1", "true", "yes"):
+        return
+    pin = kitsource.cli_pin(project.root)
+    if not pin.matches:
+        raise EkitError(f"{kitsource.STRICT_ENV} is set: {pin.message()}.")
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
     project = Project.load()
+    require_pinned_cli(project)
     ids = gates.gate_ids(project) if args.gate == "all" else [args.gate]
     overall = 0
     for gid in ids:
@@ -163,6 +193,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     lock = kitsource.read_lock(project.root) or {}
     print(f"Project {project.root.name}: stack {project.stack_id}, kit {project.kit.version} "
           f"({kitsource.source_string(lock) if lock else 'unpinned'})")
+    pin = kitsource.cli_pin(project.root)
+    print(f"ekit CLI {pin.current}, project pins {pin.pinned or 'nothing'}"
+          + ("" if pin.matches else f"  !! {pin.message()}"))
     req = project.root / "docs" / "requirements"
     prds = sorted(p for p in req.iterdir() if p.is_dir()) if req.is_dir() else []
     print("\nRequirements")
@@ -177,7 +210,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         except EkitError:
             line += " (no open-questions.yaml)"
         print(line)
-    print("\nFeatures                       spec  scen  plan  red   green")
+    from . import freeze
+    frozen = set(freeze.load_state(project.root)["frozen"])
+    print("\nFeatures                       spec  scen  plan  red   green frozen")
     for f in project.feature_dirs():
         cells = []
         for gid in ("spec", "scenarios", "plan"):
@@ -189,7 +224,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         ledger = project.root / ".ekit" / "ledger" / f"{f.name}.yaml"
         phases = {e.get("phase") for e in ((yaml.safe_load(ledger.read_text(encoding="utf-8")) or {}).get("entries") or [])} if ledger.is_file() else set()
         cells += ["ok" if "red" in phases else "--", "ok" if "green" in phases else "--"]
-        print(f"  {f.name:<28} " + "    ".join(f"{c:<2}" for c in cells))
+        print(f"  {f.name:<28} " + "    ".join(f"{c:<2}" for c in cells) + f"    {'yes' if f.name in frozen else '--'}")
     if not project.feature_dirs():
         print("  (none yet)")
     return 0
@@ -234,6 +269,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("upgrade", help="re-fetch the kit (same or new --source), re-pin and sync")
     sp.add_argument("--source")
     sp.set_defaults(fn=cmd_upgrade)
+
+    sp = sub.add_parser("freeze", help="re-apply the edit protection for a red feature (done automatically by `gate red`)")
+    sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
+    sp.set_defaults(fn=cmd_freeze)
+
+    sp = sub.add_parser("unfreeze", help="lift the edit protection of a feature's red tests (needs a reason; audited)")
+    sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
+    sp.add_argument("--reason", required=True, help="why the red tests must change; stored in .ekit/freeze.yaml")
+    sp.set_defaults(fn=cmd_unfreeze)
 
     sp = sub.add_parser("stacks", help="list stacks offered by a kit source")
     sp.add_argument("--source")

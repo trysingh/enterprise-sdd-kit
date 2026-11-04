@@ -81,3 +81,6 @@ agent_rules: |
   - All HTTP goes through `src/api/client.ts` (timeouts, correlation id, problem+json parsing). Components never call fetch directly.
   - Validate every API response with zod before use.
   - Acceptance scenarios that drive the browser are tagged @ui and implemented in acceptance/steps with Playwright; keep selectors role/label based (accessibility first).
+  - Step definitions: every step sets up state or asserts observable behaviour; no empty step functions.
+  - Landing zone (extend, never rewrite): modules created by the baseline (settings, logging, errors, security, health, app wiring) and their tests may only be extended. Never delete or replace existing behaviour in them; the `SCN-000-*` smoke scenario and the baseline unit tests must stay green. Add new code in new modules and wire it in.
+  - Frozen tests: once `ekit gate red` has recorded a feature, its `.feature` files and bound acceptance tests are frozen (`GREEN-TESTS-UNCHANGED` fails on any change). If a test is wrong, stop and report it instead of editing it.

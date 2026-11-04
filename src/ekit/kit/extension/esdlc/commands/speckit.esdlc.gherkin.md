@@ -19,8 +19,8 @@ $ARGUMENTS
 
 ## Steps
 
-1. Locate the active feature directory (`specs/<NNN-name>/`, from the current branch or the
-   input). Read `spec.md` and `trace.yaml`. If `trace.yaml` is missing, stop and tell the user
+1. Locate the active feature directory (`specs/<NNN-name>/`): the one named in the input; otherwise run
+   `ekit status` and take the feature whose `spec` column is `ok` and `scen` is `--` (ask once if several). Read `spec.md` and `trace.yaml`. If `trace.yaml` is missing, stop and tell the user
    to run `ekit gate spec` (the specify step creates it).
 2. Write one or more `.feature` files in `specs/<NNN-name>/features/`, one per user story.
 3. Tagging (parsed by the gate — be exact):

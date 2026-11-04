@@ -23,7 +23,12 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 
 - Never invent business facts. Unknowns go to `docs/requirements/<slug>/open-questions.yaml`.
 - No production behaviour before `ekit gate red` has recorded failing tests for it.
-- Never edit `.feature` files or weaken assertions to make a test pass.
+- Never edit `.feature` files or weaken assertions to make a test pass. After `ekit gate red` the feature files and bound
+  acceptance tests are frozen; `ekit gate green` fails if they change. A wrong test is reported, not edited.
+- If an edit is refused by a permission rule, stop and report which file and why you needed it. Never route around it
+  with shell redirection, `sed`, or scripts.
+- Extend the landing zone, never rewrite it: do not delete or replace existing behaviour in baseline modules.
+- Every test step sets up state or asserts behaviour. No `pass` or empty step bodies.
 - Never put secrets, tokens or real customer data in code, tests, fixtures or logs.
 - Run tools through `ekit run <command>` (lint, unit, acceptance, coverage, sca) so the same
   commands work on Windows and POSIX.

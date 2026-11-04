@@ -10,6 +10,7 @@ from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
 from .checks import REGISTRY, Finding, GateContext
+from .kitsource import cli_pin
 from .project import EkitError, Project, load_yaml
 
 OVERRIDES_FILE = ".ekit/policy.overrides.yaml"
@@ -55,6 +56,9 @@ def load_policy(project: Project) -> dict[str, Any]:
 
 
 def load_overrides(project: Project) -> tuple[dict[str, Any], list[str]]:
+    """Valid overrides need a non-empty `reason`, a named approver (`approved_by`) and an
+    `expires` date that has not passed. Anything else is ignored and reported, so a relaxation
+    is always explained, owned and time-boxed, and turns back into a failure by itself."""
     p = project.root / OVERRIDES_FILE
     if not p.is_file():
         return {}, []
@@ -62,19 +66,22 @@ def load_overrides(project: Project) -> tuple[dict[str, Any], list[str]]:
     notes, valid = [], {}
     today = dt.date.today()
     for cid, ov in (data.get("overrides") or {}).items():
-        if not isinstance(ov, dict) or not str(ov.get("reason") or "").strip():
-            notes.append(f"override for {cid} ignored: a non-empty `reason` is required")
+        if not isinstance(ov, dict):
+            notes.append(f"override for {cid} ignored: it must be a mapping with reason, approved_by and expires")
+            continue
+        missing = [k for k in ("reason", "approved_by", "expires") if not str(ov.get(k) or "").strip()]
+        if missing:
+            notes.append(f"override for {cid} ignored: {', '.join('`' + k + '`' for k in missing)} required")
             continue
         exp = ov.get("expires")
-        if exp:
-            try:
-                exp_d = exp if isinstance(exp, dt.date) else dt.date.fromisoformat(str(exp))
-                if exp_d < today:
-                    notes.append(f"override for {cid} expired on {exp_d}; ignored")
-                    continue
-            except ValueError:
-                notes.append(f"override for {cid}: bad expires date '{exp}'; ignored")
-                continue
+        try:
+            exp_d = exp if isinstance(exp, dt.date) else dt.date.fromisoformat(str(exp))
+        except ValueError:
+            notes.append(f"override for {cid}: bad expires date '{exp}'; ignored")
+            continue
+        if exp_d < today:
+            notes.append(f"override for {cid} expired on {exp_d}; ignored")
+            continue
         valid[cid] = ov
     return valid, notes
 
@@ -102,6 +109,9 @@ def run_gate(
     if gate is None:
         raise EkitError(f"Unknown gate '{gate_id}'. Known: {', '.join(gate_ids(project))}")
     overrides, notes = load_overrides(project)
+    pin = cli_pin(project.root)
+    if not pin.matches:
+        notes.insert(0, pin.message())
 
     ctx = GateContext(project=project)
     kind = gate.get("context", "project")
@@ -191,11 +201,13 @@ def render_json(res: GateResult, notes: list[str]) -> str:
     }, indent=2)
 
 
-def render_junit(res: GateResult) -> str:
+def render_junit(res: GateResult, notes: list[str] | None = None) -> str:
     fails = sum(1 for c in res.checks if c.status == "fail")
     skips = sum(1 for c in res.checks if c.status == "skipped")
     out = ['<?xml version="1.0" encoding="UTF-8"?>',
            f'<testsuite name={quoteattr("ekit.gate." + res.gate)} tests="{len(res.checks)}" failures="{fails}" skipped="{skips}">']
+    if notes:   # e.g. a CLI that differs from the project pin, ignored overrides: CI must see these too
+        out.append(f'  <system-out>{escape(chr(10).join("note: " + n for n in notes))}</system-out>')
     for c in res.checks:
         out.append(f'  <testcase classname={quoteattr("ekit.gate." + res.gate)} name={quoteattr(c.id)}>')
         msg = "\n".join(f"{f.level}: {f.message}" for f in c.findings if f.level != "info")
@@ -213,7 +225,7 @@ def render_junit(res: GateResult) -> str:
 def write_report(res: GateResult, notes: list[str], fmt: str, out: Path | None, verbose: bool) -> str:
     text = {"text": lambda: render_text(res, notes, verbose),
             "json": lambda: render_json(res, notes),
-            "junit": lambda: render_junit(res)}[fmt]()
+            "junit": lambda: render_junit(res, notes)}[fmt]()
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text + "\n", encoding="utf-8")

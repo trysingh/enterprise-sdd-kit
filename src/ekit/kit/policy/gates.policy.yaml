@@ -141,6 +141,9 @@ spec:
       description: Acceptance suite runs; every scenario of this feature is bound and FAILS. Records a ledger entry.
       context: feature
       checks:
+        - id: RED-STEPS-ASSERT
+          type: bdd.vacuous_steps
+          with: { dir: "{feature_dir}/features" }
         - id: RED-RUN
           type: bdd.run
           with: { expect: red, dir: "{feature_dir}/features", record: true }
@@ -163,6 +166,9 @@ spec:
       checks:
         - id: GREEN-RED-FIRST
           type: ledger.red_first
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-TESTS-UNCHANGED
+          type: ledger.tests_unchanged
           with: { dir: "{feature_dir}/features" }
         - id: GREEN-RUN
           type: bdd.run

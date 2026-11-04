@@ -50,7 +50,7 @@ provides:
     - type: "command"
       name: "speckit.tasks"
       file: "commands/speckit.tasks.md"
-      description: "Gate plan + scenarios before; TDD task ordering"
+      description: "Gate plan before; TDD task ordering"
       strategy: "wrap"
     - type: "command"
       name: "speckit.implement"
