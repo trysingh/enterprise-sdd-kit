@@ -1,0 +1,87 @@
+# Golden landing zone for the fastapi-jinja stack.
+#
+# A pre-built, human-reviewed landing zone that already satisfies every platform-scope NFR of the
+# baseline. `ekit init --stack fastapi-jinja` installs it by default (`--baseline generate` opts out
+# and lets /speckit.esdlc.baseline build one from nothing, as in 0.2.x).
+#
+# Everything here is part of the vendored kit, so it is hashed in .ekit/kit.lock.yaml like every
+# other rule. The installed copy is fingerprinted per file in .ekit/golden.lock.yaml, which is the
+# merge base for `ekit upgrade` and the reference for `BASE-GOLDEN-INTACT` / `GREEN-GOLDEN-INTACT`.
+apiVersion: ekit/v1
+kind: GoldenLandingZone
+metadata:
+  stack: fastapi-jinja
+  version: 1.0.0            # golden revision; bump on any change under tree/
+  description: FastAPI + server-rendered Jinja2, uv, pytest-bdd; typed scenario context and shared steps
+
+# Files whose text contains __PROJECT_NAME__ / __PROJECT_SLUG__ placeholders (replaced on install).
+render:
+  - pyproject.toml
+  - src/app/core/settings.py
+  - src/app/templates/base.html
+  - docs/adr/0002-golden-landing-zone-fastapi-jinja.md
+
+# Stored with a `dot_` prefix so packaging tools never treat them as their own config.
+rename:
+  dot_gitignore: .gitignore
+  dot_python-version: .python-version
+  dot_dockerignore: .dockerignore
+  dot_pre-commit-config.yaml: .pre-commit-config.yaml
+
+# Golden core: the agent's edit tools are denied here (permission.edit in opencode.json), and the
+# baseline and green gates fail if any of these files differ from .ekit/golden.lock.yaml.
+# A person changes them with `ekit baseline unfreeze --reason "..."`, edits, then
+# `ekit baseline accept --reason "..."` (re-fingerprints, re-freezes; both audited).
+frozen:
+  - src/app/main.py
+  - src/app/core/**
+  - src/app/api/**
+  - src/app/web/**
+  - src/app/templates/base.html
+  - src/app/templates/home.html
+  - src/app/templates/features/reference/**
+  - src/app/static/**
+  - src/app/features/__init__.py
+  - src/app/features/f000_reference/**
+  - tests/conftest.py
+  - tests/acceptance/conftest.py
+  - tests/acceptance/support/**
+  - tests/acceptance/test_000_landing_zone.py
+  - tests/acceptance/test_000_reference_slice.py
+  - tests/unit/test_core_*.py
+  - tests/unit/test_reference_*.py
+  - specs/000-landing-zone/**
+  - specs/000-reference-slice/**
+  - migrations/env.py
+  - Dockerfile
+  - docs/engineering/baseline-conformance.md
+
+# Where feature work goes. Listed for the agent (AGENTS.md) and for `ekit feature package`.
+seams:
+  feature_package: src/app/features/f{number}_{slug}      # one package per Spec Kit feature folder
+  registry: src/app/features/registry.py                  # add the feature's router here
+  templates: src/app/templates/features/{slug}/
+  migrations: migrations/versions/
+  unit_tests: tests/unit/features/
+  acceptance_tests: tests/acceptance/test_{number}_{slug}.py
+
+# The reference slice: a complete, tested example of one feature. Copy its *shape*, never its
+# names, ids or imports (`RED-NO-EXEMPLAR`).
+exemplar:
+  spec_dir: specs/000-reference-slice
+  package: app.features.f000_reference
+  acceptance_test: tests/acceptance/test_000_reference_slice.py
+
+# Run after the files are copied, when the tool is on PATH (needs network once).
+post_install:
+  - ["uv", "lock"]
+
+agent_rules: |
+  - Golden landing zone (fastapi-jinja, `ekit baseline status`). Core files are frozen against your edit tools: `src/app/main.py`, `src/app/core/**`, `src/app/api/**`, `src/app/web/**`, the base templates, `tests/acceptance/conftest.py`, `tests/acceptance/support/**` and the `000-*` scenarios. A refused edit there is by design: stop and report what you needed.
+  - Feature code goes in the feature's own package: `ekit feature package <NNN-slug>` prints it (e.g. `src/app/features/f003_conversation_history/`). Register its router in `src/app/features/registry.py`. Templates go in `src/app/templates/features/<slug>/`, migrations in `migrations/versions/`, unit tests in `tests/unit/features/`.
+  - Settings for a feature: declare a `pydantic_settings.BaseSettings` class in the feature package with its own `env_prefix` (e.g. `APP_CHAT_`), built once like `app.core.settings.get_settings()`. Never edit core settings for a feature and never read `os.environ`.
+  - Stubs before implementation: call `app.core.errors.not_implemented()` (a 501 problem document). Red tests then fail on an assertion about the status, which is what `RED-CLEAN-FAILURE` expects.
+  - Acceptance steps: use the shared steps in `tests/acceptance/conftest.py` first (`the application is running`, `I GET "..."`, `I POST JSON to "..." with`, `the response status is N`, `the response JSON field "x" equals "y"`, `the response is a problem document with code "..."`, `the page contains "..."`). Write a feature-specific step only for domain language.
+  - Scenario state: every step takes `ctx: ScenarioContext` and uses `ctx.remember(key, value)` / `ctx.recall(key)`. Never create a dict fixture or index `scenario_state[...]` (`RED-STATE-TYPED`). `ctx.recall` of a key this scenario never set raises `MissingScenarioStateError`, and red rejects it: a Given in *this* scenario must set what its Then reads.
+  - Reference slice: `specs/000-reference-slice/`, `src/app/features/f000_reference/` and `tests/acceptance/test_000_reference_slice.py` show one complete feature. Copy the shape; never import from it, bind its feature file, reuse its `@SCN-000-*` ids, or name anything after it (`RED-NO-EXEMPLAR`).
+  - ADRs: create them with `ekit adr new "Title"`, which takes the next free number. Never number an ADR by hand.

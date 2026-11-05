@@ -31,6 +31,8 @@ def fingerprint(project: Any) -> dict[str, Any]:
         "kit_sha256": lock.get("sha256"),
         "active_profiles": sorted(p.id for p in project.active_profiles),
         "wave": plan.current if plan is not None else None,
+        # 0.3.0: golden projects — the core files' recorded fingerprints (changes on accept / upgrade merge)
+        "golden_lock_sha256": _sha(project.root / ".ekit" / "golden.lock.yaml"),
     }
 
 
@@ -52,9 +54,21 @@ def record(project: Any, path: str = RECORD) -> Path | None:
         "git_head": head,
         "kit_version": project.kit.version,
         "ekit_version": __version__,
+        **_provenance(project),
         "fingerprint": fp,
     }, dest)
     return dest
+
+
+def _provenance(project: Any) -> dict[str, Any]:
+    """Which way the landing zone was made (0.3.0): golden (and which revision) or generated."""
+    base = ((getattr(project, "config", None) or {}).get("baseline") or {})
+    out: dict[str, Any] = {"baseline_mode": base.get("mode") or "generate"}
+    if base.get("mode") == "golden":
+        from .golden import read_lock
+        lock = read_lock(project.root) or {}
+        out["golden"] = {"stack": lock.get("stack"), "version": lock.get("version")}
+    return out
 
 
 def status(project: Any) -> tuple[str, str]:
@@ -69,6 +83,8 @@ def status(project: Any) -> tuple[str, str]:
         reasons.append(f"{CONFORMANCE} changed")
     if old.get("kit_sha256") != now["kit_sha256"]:
         reasons.append("the pinned kit changed (ekit upgrade)")
+    if "golden_lock_sha256" in old and old.get("golden_lock_sha256") != now["golden_lock_sha256"]:
+        reasons.append("the golden core was re-accepted or merged")
     if old.get("active_profiles") != now["active_profiles"]:
         added = sorted(set(now["active_profiles"]) - set(old.get("active_profiles") or []))
         reasons.append(f"newly active: {', '.join(added)}" if added else "active profiles changed")
@@ -77,7 +93,10 @@ def status(project: Any) -> tuple[str, str]:
     if reasons:
         return "stale", f"passed {when} at {head}, but {'; '.join(reasons)}: run `ekit gate baseline`"
     wave = f", wave {now['wave']}" if now.get("wave") else ""
-    return "passed", f"{when} at {head} (kit {rec.get('kit_version')}{wave})"
+    mode = rec.get("baseline_mode")
+    golden = rec.get("golden") or {}
+    how = f", golden {golden.get('version')}" if mode == "golden" else (", generated" if mode else "")
+    return "passed", f"{when} at {head} (kit {rec.get('kit_version')}{how}{wave})"
 
 
 def smoke_summary(project: Any) -> str | None:

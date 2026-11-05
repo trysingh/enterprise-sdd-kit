@@ -1,0 +1,22 @@
+# Python / uv (ENV-01: the environment is local and never committed)
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local configuration and data
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+
+# Build and reports
+dist/
+build/
+reports/

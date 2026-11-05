@@ -387,13 +387,20 @@ def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 
 
 # ------------------------------------------------------------------------- profile
+_MISSING_HINTS = {
+    "uv.lock": " (run `uv lock` once — it needs network access — then `ekit run install`; the golden landing "
+               "zone generates it on install when uv is on PATH)",
+}
+
+
 @check("profile.required_paths")
 def required_paths(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     out = []
     for prof in _active(ctx):
         for rel in (prof.data.get("layout") or {}).get("required_paths", []) or []:
             if not (prof.root / rel).exists():
-                out.append(Finding("error", f"[{prof.id}] missing {ctx.project.rel(prof.root / rel)}"))
+                hint = _MISSING_HINTS.get(Path(rel).name, "")
+                out.append(Finding("error", f"[{prof.id}] missing {ctx.project.rel(prof.root / rel)}{hint}"))
     return out
 
 
@@ -790,6 +797,13 @@ def clean_failure(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             if gherkin._scenario_status(el) != "failed":
                 continue
             exc = gherkin.failure_exception(el)
+            if exc == "MissingScenarioStateError" and exc not in allowed:
+                out.append(Finding("error", f"{sid}: a step read scenario state that no earlier step of THIS scenario "
+                                             "set (MissingScenarioStateError from ScenarioContext.recall / .http / "
+                                             ".last_response). That is broken test glue, not a red: add the missing "
+                                             "Given/When to this scenario or set the value in a step it already has, "
+                                             "then rerun `ekit gate red`"))
+                continue
             if exc and exc not in allowed:
                 out.append(Finding("error", f"{sid}: failed with {exc}, not {'/'.join(sorted(allowed))} — this "
                                              "usually means broken test glue (a missing fixture value, an undefined "
@@ -941,4 +955,121 @@ def profile_environment(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
                 out.append(Finding("error", f"{tag} {rel} uses Python {actual} but {ctx.project.rel(pin)} pins {wanted}; delete {rel} and run `ekit run install`"))
     if checked == 0:
         out.append(Finding("info", "no profile declares an environment"))
+    return out
+
+
+# ------------------------------------------------------------------------- 0.3.0: golden landing zone
+def _golden(ctx: GateContext) -> Any:
+    from . import golden
+    return golden.for_project(ctx.project)
+
+
+@check("constitution.intact")
+def constitution_intact(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Principles I–VIII in the ratified constitution are word-for-word the kit template (whitespace aside).
+    Before 0.3.0 only pull-request review protected them."""
+    from . import constitution
+    state, details = constitution.principles_drift(ctx.project)
+    if state == "intact":
+        return []
+    if state == "changed":
+        return [Finding("error", f"{constitution.MEMORY}: {d}. Restore I–VIII from "
+                                 f"{ctx.project.rel(constitution.template_path(ctx.project))}; changing them needs an ADR "
+                                 "and a new kit version. Project principles go in IX and above") for d in details]
+    return [Finding("warn", f"{constitution.MEMORY}: {d}") for d in details]
+
+
+@check("golden.intact")
+def golden_intact(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Golden projects: every frozen core file is byte-identical (CRLF aside) to .ekit/golden.lock.yaml.
+    This is also what covers shared test helpers and conftest.py, which `GREEN-TESTS-UNCHANGED` does not."""
+    from . import golden
+    if not golden.is_golden(ctx.project):
+        return [Finding("info", "not a golden landing zone (baseline mode: generate)")]
+    if golden.read_lock(ctx.project.root) is None:
+        return [Finding("error", f"baseline mode is golden but {golden.LOCK} is missing: restore it from git")]
+    out = []
+    for d in golden.drift(ctx.project.root):
+        hint = ("resolve the markers, review, then a person runs `ekit baseline accept --reason \"...\"`"
+                if d.kind == "conflict" else
+                "restore it (`git checkout -- <file>`), or, for a reviewed change to the core, a person runs "
+                "`ekit baseline accept --reason \"...\"`. Feature code belongs in its feature package")
+        out.append(Finding("error", f"{d.message()}: {hint}"))
+    return out
+
+
+# Names that, used as a dict shared between steps, produced the 0.2.2 KeyError class of broken red.
+_UNTYPED_STATE = {"scenario_state", "state", "shared", "shared_state", "context", "scenario_context", "store"}
+
+
+def _untyped_state_uses(source: str) -> list[tuple[int, str]]:
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in node.args.args + node.args.kwonlyargs}
+        is_fixture = any("fixture" in ast.unparse(d) for d in node.decorator_list)
+        if is_fixture and node.name in _UNTYPED_STATE:
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Return) and isinstance(sub.value, (ast.Dict, ast.Call)) and (
+                        isinstance(sub.value, ast.Dict) or ast.unparse(sub.value.func) in ("dict", "defaultdict")):
+                    found.append((node.lineno, f"fixture `{node.name}` returns a dict"))
+                    break
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)
+                    and sub.value.id in _UNTYPED_STATE and sub.value.id in params):
+                found.append((sub.lineno, f"`{sub.value.id}[...]` in step `{node.name}`"))
+    return found
+
+
+@check("bdd.typed_state")
+def typed_state(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Golden projects: steps keep scenario state on `ctx: ScenarioContext`, not in a shared dict.
+    A dict lets a step read a key another scenario's step set; pytest-bdd then reports the KeyError
+    like a real failure (the 0.2.2 bug). `ctx.recall` raises MissingScenarioStateError instead."""
+    from . import golden
+    if not golden.is_golden(ctx.project):
+        return [Finding("info", "typed scenario state is enforced in golden landing zones only")]
+    out = []
+    for f in _feature_bound_tests(ctx, w["dir"]):
+        if f.suffix != ".py":
+            continue
+        for line, what in _untyped_state_uses(f.read_text(encoding="utf-8", errors="replace")):
+            out.append(Finding("error", f"{_rel_posix(ctx, f)}:{line} {what}: keep scenario state on "
+                                        "`ctx: ScenarioContext` (`ctx.remember(key, value)` / `ctx.recall(key)`), "
+                                        "see tests/acceptance/test_000_reference_slice.py"))
+    return out
+
+
+@check("golden.no_exemplar")
+def no_exemplar(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """A feature never *is* the reference slice and never depends on it (0.2.5: an agent took an
+    illustrative example for the real feature). Copying its shape is the point; referencing it is not."""
+    from . import golden
+    g = _golden(ctx)
+    if g is None:
+        return [Finding("info", "no reference slice (not a golden landing zone)")]
+    ex = g.exemplar
+    spec_dir = str(ex.get("spec_dir") or "")
+    pkg = str(ex.get("package") or "")
+    out: list[Finding] = []
+    if ctx.feature_dir is not None and spec_dir and _rel_posix(ctx, ctx.feature_dir) == spec_dir:
+        return [Finding("error", f"{spec_dir} is the reference slice, not a feature: name the real feature "
+                                 "(`ekit feature current`)")]
+    needles = [n for n in (Path(spec_dir).name, pkg, pkg.rsplit(".", 1)[-1], "SCN-000-") if n]
+    files = list(_feature_bound_tests(ctx, w["dir"]))
+    pkg_rel = golden.feature_package(g, ctx.feature_dir.name) if ctx.feature_dir is not None else None
+    if pkg_rel and (ctx.project.root / pkg_rel).is_dir():
+        files += sorted((ctx.project.root / pkg_rel).rglob("*.py"))
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        hits = [n for n in needles if n in text]
+        if hits:
+            out.append(Finding("error", f"{_rel_posix(ctx, f)} refers to the reference slice ({', '.join(hits)}): "
+                                        "copy its shape, never import it, bind its feature file or reuse its ids"))
     return out

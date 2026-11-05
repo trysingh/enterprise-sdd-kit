@@ -36,6 +36,9 @@ ALWAYS_BASH = [
     "ekit wave advance*",
     "ekit wave decline*",
     "ekit models*",
+    "ekit baseline unfreeze*",   # 0.3.0: the golden core is changed by a person, not the agent
+    "ekit baseline accept*",
+    "ekit baseline install*",
 ]
 
 
@@ -50,6 +53,8 @@ def load_state(root: Path) -> dict[str, Any]:
     data.setdefault("managed_bash", [])
     data.setdefault("frozen", {})
     data.setdefault("narrow", {})   # feature -> source-dir deny patterns, while its tests are unfrozen
+    data.setdefault("baseline", [])           # 0.3.0: golden core deny patterns currently applied
+    data.setdefault("baseline_patterns", [])  # the golden core patterns, kept while unfrozen
     data.setdefault("history", [])
     return data
 
@@ -60,6 +65,7 @@ def desired_patterns(state: dict[str, Any]) -> list[str]:
         pats += feature_patterns
     for narrow_patterns in (state.get("narrow") or {}).values():
         pats += narrow_patterns
+    pats += list(state.get("baseline") or [])
     return list(dict.fromkeys(pats))
 
 
@@ -201,6 +207,32 @@ def unfreeze_feature(root: Path, feature: str, reason: str, *, narrow_src: list[
     return sync_permissions(root)
 
 
+def freeze_baseline(root: Path, patterns: list[str] | None = None) -> list[str]:
+    """Deny the golden core to the agent's edit tools (0.3.0). `patterns` defaults to the ones recorded."""
+    state = load_state(root)
+    pats = sorted(set(patterns if patterns is not None else (state.get("baseline_patterns") or [])))
+    state["baseline_patterns"] = pats
+    state["baseline"] = pats
+    dump_yaml(state, state_path(root))
+    return sync_permissions(root)
+
+
+def unfreeze_baseline(root: Path, reason: str) -> list[str]:
+    """A person lifts the golden-core freeze to change it on purpose; `ekit baseline accept` re-freezes."""
+    if not reason.strip():
+        raise EkitError('A reason is required: ekit baseline unfreeze --reason "..."')
+    state = load_state(root)
+    if not state.get("baseline"):
+        raise EkitError("The golden core is not frozen (nothing to unfreeze).")
+    state["history"].append({
+        "action": "unfreeze-baseline", "reason": reason.strip(), "by": _who(root),
+        "at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(), "paths": state["baseline"],
+    })
+    state["baseline"] = []
+    dump_yaml(state, state_path(root))
+    return sync_permissions(root)
+
+
 def verify(root: Path) -> list[tuple[bool, str, str]]:
     """Rows for `ekit doctor`: (ok, label, detail)."""
     state = load_state(root)
@@ -219,8 +251,15 @@ def verify(root: Path) -> list[tuple[bool, str, str]]:
     brules = brules if isinstance(brules, dict) else {}
     bmissing = [pat for pat in ALWAYS_BASH if brules.get(pat) != "deny"]
     rows.append((not bmissing, "agent cannot run approval commands",
-                 "ekit unfreeze / fix-red / upgrade / wave approve|advance|decline / models" if not bmissing
+                 "ekit unfreeze / fix-red / upgrade / wave approve|advance|decline / models / baseline unfreeze|accept|install" if not bmissing
                  else f"missing bash deny for {', '.join(bmissing)}: run `ekit sync`"))
+    if state.get("baseline_patterns"):
+        if state.get("baseline"):
+            gone = [x for x in state["baseline"] if rules.get(x) != "deny"]
+            rows.append((not gone, "golden core frozen", f"{len(state['baseline'])} pattern(s)" if not gone
+                         else f"missing deny for {', '.join(gone)}: run `ekit baseline freeze`"))
+        else:
+            rows.append((True, "golden core unfrozen", "a person is changing it: finish with `ekit baseline accept --reason`"))
     for feature, pats in sorted(state["frozen"].items()):
         gone = [x for x in pats if rules.get(x) != "deny"]
         rows.append((not gone, f"{feature} frozen", f"{len(pats)} rule(s)" if not gone else f"missing deny for {', '.join(gone)}: run `ekit freeze {feature}`"))

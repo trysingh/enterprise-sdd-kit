@@ -1,0 +1,13 @@
+.git
+.venv
+.ekit
+.specify
+.opencode
+specs
+docs
+tests
+reports
+__pycache__
+*.pyc
+.env
+.env.*

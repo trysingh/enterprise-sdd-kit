@@ -65,6 +65,18 @@ def _added_since(root: Path, red_commit: str, dirs: list[str]) -> list[str]:
     return added
 
 
+def _revert_scope(project: Any, feature: str) -> list[str]:
+    """What to revert to the last-red commit. Golden projects (0.3.0) keep each feature's code in its
+    own package, so only that package is reverted — not the whole source tree, which on a project with
+    several features could strip shared code added since (the limit 0.2.4 could only explain)."""
+    from . import golden
+    root = project.root
+    pkg = golden.feature_package(golden.for_project(project), feature)
+    if pkg and (root / pkg).is_dir():
+        return [pkg]
+    return [d for d in freeze.source_dirs(project) if (root / d).is_dir()]
+
+
 def fix_red(project: Any, feature: str, reason: str) -> tuple[bool, str]:
     """Unfreeze, temporarily revert the feature's source to its last-red state, run `ekit gate
     red`, restore the source either way. Returns (clean, report) — `clean` is whether red came
@@ -74,7 +86,7 @@ def fix_red(project: Any, feature: str, reason: str) -> tuple[bool, str]:
     state = freeze.load_state(root)
     if feature not in state["frozen"]:
         raise EkitError(f"{feature} is not frozen — nothing to fix. (New feature? Just fix the test and `ekit gate red`.)")
-    dirs = [d for d in freeze.source_dirs(project) if (root / d).is_dir()]
+    dirs = _revert_scope(project, feature)
     if not dirs:
         raise EkitError("No active profile's production source directory exists yet (layout.source); "
                          "revert it yourself (`git stash`/`git checkout`), then `ekit unfreeze` and `ekit gate red`.")

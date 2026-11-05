@@ -22,6 +22,12 @@ $ARGUMENTS
 
 ## Mode
 
+- **Golden** (`ekit baseline status` names a golden landing zone, installed by `ekit init`):
+  the landing zone already exists and its core is frozen. **Do not generate or rewrite anything.**
+  Only: run `ekit run install`, `ekit gate baseline`, `ekit run unit` and `ekit run acceptance`;
+  report the results. If a gate fails, report the finding to the user — a failing golden core is a
+  kit or environment problem (for example `uv.lock` not generated yet: the user runs `uv lock`), not
+  something to fix by editing core files. Then go to step 7.
 - **Greenfield** (no application code yet): build the skeleton.
 - **Brownfield** (application code exists): **assess, don't impose.** Do not restructure
   existing code. Produce the conformance record with honest statuses and turn every gap into
@@ -40,7 +46,8 @@ $ARGUMENTS
    its step definitions.
 3. Make every profile `commands` entry runnable and non-interactive (scripts in package.json /
    plugins in pom.xml / tool config in pyproject.toml).
-4. Add `docs/adr/0001-record-architecture-decisions.md` and one ADR for the stack choice.
+4. Add ADRs with `ekit adr new "Record architecture decisions"` and one for the stack choice
+   (`ekit adr new` takes the next free number).
 
 ## Both modes
 

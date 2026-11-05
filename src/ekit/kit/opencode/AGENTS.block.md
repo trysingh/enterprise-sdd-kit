@@ -37,8 +37,11 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 - Run tools through `ekit run <command>` (lint, unit, acceptance, coverage, sca) so the same
   commands work on Windows and POSIX.
 - Use `ekit context` whenever you need the stack, layout, NFRs or rules.
-- Never run `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline` or `ekit models …`:
-  they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
+- Which feature to work on is decided by `ekit feature current --for red|implement "<what the user said>"`, never by
+  you: use the folder it prints; if it fails, show its message and stop.
+- ADRs: `ekit adr new "Title"` (takes the next free number). Never number an ADR by hand.
+- Never run `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …` or
+  `ekit baseline unfreeze|accept|install`: they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
   shell tool.)
   While a feature is unfrozen, its production source directories are usually also denied to your edit tool until
   it's re-frozen — that's by design (see the previous bullet), not a bug to work around.

@@ -23,7 +23,8 @@ def _interactive(args: argparse.Namespace) -> bool:
 # --------------------------------------------------------------------------- handlers
 def cmd_init(args: argparse.Namespace) -> int:
     installer.init(args.target, stack=args.stack, source=args.source, integration=args.integration,
-                   force=args.force, interactive=_interactive(args), extra_specify=args.specify_arg or [])
+                   force=args.force, interactive=_interactive(args), extra_specify=args.specify_arg or [],
+                   baseline=args.baseline, name=args.name)
     return 0
 
 
@@ -424,6 +425,95 @@ def cmd_models(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_constitution(args: argparse.Namespace) -> int:
+    from . import constitution
+    project = Project.load()
+    if args.action == "ratify":
+        notes = constitution.ratify(project, name=args.name)
+        print("\n".join(notes) if notes else f"{constitution.MEMORY} is already ratified; nothing to fill.")
+    state, details = constitution.principles_drift(project)
+    print(f"principles I-VIII: {state}" + "".join(f"\n  - {d}" for d in details))
+    return 1 if state == "changed" else 0
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    from . import freeze, golden, landing
+    project = Project.load()
+    root = project.root
+    a = args.action
+    if a == "install":
+        if golden.is_golden(project) and golden.read_lock(root):
+            raise EkitError("The golden landing zone is already installed.")
+        installer.set_baseline_mode(root, "golden")
+        try:
+            installer.install_golden(Project.load(root), name=args.name)
+        except EkitError:
+            installer.set_baseline_mode(root, str(((project.config or {}).get("baseline") or {}).get("mode") or "generate"))
+            raise
+        installer.install_opencode_assets(Project.load(root))
+        print("Installed. Next: `ekit run install`, `ekit gate baseline`, commit, restart OpenCode.")
+        return 0
+    if not golden.is_golden(project):
+        mode = ((project.config or {}).get("baseline") or {}).get("mode") or "generate"
+        print(f"Landing zone: {mode} (no golden core). `ekit gate baseline` judges it; "
+              f"{landing.status(project)[0]}.")
+        return 0 if a in ("status", "drift") else 2
+    if a == "unfreeze":
+        freeze.unfreeze_baseline(root, args.reason or "")
+        print("Golden core unfrozen (recorded in .ekit/freeze.yaml). Restart OpenCode. When the change is reviewed: "
+              "`ekit baseline accept --reason \"...\"` (re-fingerprints and re-freezes).")
+        return 0
+    if a == "accept":
+        changed = golden.accept(root, args.reason or "")
+        lock = golden.read_lock(root) or {}
+        freeze.freeze_baseline(root, list(lock.get("frozen") or []))
+        print(("Accepted: " + "; ".join(changed)) if changed else "Nothing differed from the record.")
+        print("Golden core re-frozen. Run `ekit gate baseline`, commit .ekit/, restart OpenCode.")
+        return 0
+    if a == "freeze":
+        lock = golden.read_lock(root) or {}
+        rules = freeze.freeze_baseline(root, list(lock.get("frozen") or []) or None)
+        print(f"Golden core frozen: {len(rules)} deny rule(s) in opencode.json. Restart OpenCode.")
+        return 0
+    lock = golden.read_lock(root) or {}
+    found = golden.drift(root)
+    if a == "status":
+        st = freeze.load_state(root)
+        print(f"Golden landing zone {lock.get('stack')} {lock.get('version')} (installed {str(lock.get('installed_at'))[:10]})")
+        print(f"  core: {'frozen' if st.get('baseline') else 'UNFROZEN (a person is changing it)'}, "
+              f"{len(lock.get('frozen') or [])} pattern(s); drift: {len(found)} file(s)")
+        print(f"  landing zone gate: {' — '.join(landing.status(project))}")
+        g = golden.for_project(project)
+        if g is not None:
+            print(f"  seams: " + "; ".join(f"{k}: {v}" for k, v in g.seams.items()))
+    for d in found:
+        print(f"  {d.kind:<8} {d.rel}")
+    if a == "drift" and not found:
+        print("No drift: every golden core file matches .ekit/golden.lock.yaml.")
+    return 1 if (a == "drift" and found) else 0
+
+
+def cmd_feature(args: argparse.Namespace) -> int:
+    from . import features, golden
+    project = Project.load()
+    if args.action == "package":
+        feature = features.current(project, args.name, phase="any")
+        pkg = golden.feature_package(golden.for_project(project), feature)
+        if not pkg:
+            raise EkitError("Feature packages are a golden landing zone convention; this project has none.")
+        print(pkg)
+        return 0
+    print(features.current(project, args.name, phase=args.phase))
+    return 0
+
+
+def cmd_adr(args: argparse.Namespace) -> int:
+    from . import features
+    project = Project.load()
+    print(project.rel(features.new_adr(project.root, " ".join(args.title))))
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         project = Project.load()
@@ -447,6 +537,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--force", action="store_true", help="pass --force to `specify init --here` (non-empty dir)")
         sp.add_argument("--non-interactive", action="store_true", help="never prompt (CI); requires --stack")
         sp.add_argument("--specify-arg", action="append", help="extra argument forwarded to `specify init` (repeatable)")
+        sp.add_argument("--baseline", choices=["golden", "generate"],
+                        help="landing zone: the kit's golden one (default where the stack has one) or generated by the model")
+        sp.add_argument("--name", help="project name used in the golden landing zone and constitution (default: folder name)")
 
     sp = sub.add_parser("init", help="new project (or `.`): specify init + opencode + kit")
     sp.add_argument("target", help="project directory name, or . for the current directory")
@@ -540,6 +633,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--recommended", action="store_true", help="setup without prompts: use the recommendation for unset tiers")
     sp.add_argument("--non-interactive", action="store_true", help="never prompt")
     sp.set_defaults(fn=cmd_models)
+
+    sp = sub.add_parser("constitution", help="ratify (fill placeholders deterministically) | check principles I-VIII")
+    sp.add_argument("action", choices=["ratify", "check"])
+    sp.add_argument("--name", help="project name (default: folder name)")
+    sp.set_defaults(fn=cmd_constitution)
+
+    sp = sub.add_parser("baseline", help="golden landing zone: status | drift | freeze | unfreeze | accept | install")
+    sp.add_argument("action", nargs="?", default="status",
+                    choices=["status", "drift", "freeze", "unfreeze", "accept", "install"])
+    sp.add_argument("--reason", help="unfreeze / accept: why the core changes (recorded)")
+    sp.add_argument("--name", help="install: project name (default: folder name)")
+    sp.set_defaults(fn=cmd_baseline)
+
+    sp = sub.add_parser("feature", help="current [NAME] [--for red|implement|any]: the one feature to work on, or fail | "
+                                        "package [NAME]: its code package")
+    sp.add_argument("action", choices=["current", "package"])
+    sp.add_argument("name", nargs="?", help="what the user named: NNN-slug or NNN (optional)")
+    sp.add_argument("--for", dest="phase", choices=["red", "implement", "any"], default="any")
+    sp.set_defaults(fn=cmd_feature)
+
+    sp = sub.add_parser("adr", help='new "Title": create docs/adr/NNNN-title.md with the next free number')
+    sp.add_argument("action", choices=["new"])
+    sp.add_argument("title", nargs="+")
+    sp.set_defaults(fn=cmd_adr)
 
     sp = sub.add_parser("doctor", help="check tools, kit integrity and installation")
     sp.set_defaults(fn=cmd_doctor)

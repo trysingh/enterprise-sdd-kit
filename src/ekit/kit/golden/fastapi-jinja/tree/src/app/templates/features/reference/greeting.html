@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Greeting{% endblock %}
+{% block content %}
+  <h1>Greeting</h1>
+  <form method="post" action="/reference">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="name">Name</label>
+    <input id="name" name="name" maxlength="40" autocomplete="off" required>
+    <button type="submit">Greet</button>
+  </form>
+  {% if message %}<p role="status">{{ message }}</p>{% endif %}
+{% endblock %}

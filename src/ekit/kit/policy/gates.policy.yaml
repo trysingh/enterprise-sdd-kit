@@ -17,7 +17,7 @@ apiVersion: ekit.policy/v1
 kind: GatePolicy
 metadata:
   name: enterprise-generic
-  version: 0.1.0
+  version: 0.3.0
 
 spec:
   defaults:
@@ -128,6 +128,12 @@ spec:
           type: profile.command
           severity: warn          # becomes error once the skeleton is generated
           with: { command: lint }
+        - id: BASE-CONSTITUTION
+          type: constitution.intact     # 0.3.0: principles I-VIII match the kit template; unratified = warn
+          with: {}
+        - id: BASE-GOLDEN-INTACT
+          type: golden.intact           # 0.3.0: golden projects: core files match .ekit/golden.lock.yaml
+          with: {}
 
     # ------------------------------------------------------------------ Gherkin
     - id: scenarios
@@ -156,6 +162,12 @@ spec:
           with: { dir: "{feature_dir}/features" }
         - id: RED-STEPS-BOUND
           type: bdd.steps_bound        # every step has a definition the binding module can see
+          with: { dir: "{feature_dir}/features" }
+        - id: RED-STATE-TYPED
+          type: bdd.typed_state        # 0.3.0 (golden): scenario state on ScenarioContext, never a shared dict
+          with: { dir: "{feature_dir}/features" }
+        - id: RED-NO-EXEMPLAR
+          type: golden.no_exemplar     # 0.3.0 (golden): the feature is not, and does not use, the reference slice
           with: { dir: "{feature_dir}/features" }
         - id: RED-RUN
           type: bdd.run
@@ -194,6 +206,12 @@ spec:
           with: { dir: "{feature_dir}/features" }
         - id: GREEN-STEPS-BOUND
           type: bdd.steps_bound        # also catches features recorded red before ekit 0.2.1
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-GOLDEN-INTACT
+          type: golden.intact          # 0.3.0 (golden): implementation did not rewrite the core or its test helpers
+          with: {}
+        - id: GREEN-NO-EXEMPLAR
+          type: golden.no_exemplar
           with: { dir: "{feature_dir}/features" }
         - id: GREEN-RUN
           type: bdd.run

@@ -234,4 +234,4 @@ def test_bundled_kit_wires_the_021_checks():
     assert "REDREC-COMMITTED" in by_gate["red-recorded"] and "GREEN-RED-COMMITTED" in by_gate["green"]
     assert "BASE-ADR-UNIQUE" in by_gate["baseline"] and "PLAN-ADR-UNIQUE" in by_gate["plan"]
     assert next(g for g in pol if g["id"] == "baseline")["record"] == ".ekit/ledger/baseline.yaml"
-    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.5,<0.3"
+    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.3.0,<0.4"

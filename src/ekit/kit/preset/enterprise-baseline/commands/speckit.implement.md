@@ -5,13 +5,9 @@ strategy: wrap
 
 ## Enterprise pre-flight
 
-0. Active feature: if `$ARGUMENTS` actually names a feature — a folder name (shape: `NNN-slug`) or
-   just its number (shape: `NNN`) — use that one. `001-user-admin` and `001` above are only examples
-   of that *shape*, not real features in this project; never treat them as the feature to implement
-   just because `$ARGUMENTS` is empty or unclear. If `$ARGUMENTS` names nothing real, run `ekit status`
-   yourself and take the one feature whose `red` column is `ok` and `green` is `--`; if several
-   qualify, ask once which; if none do, say so and stop. Do not guess, and never fall back to an
-   example name.
+0. Active feature: run `ekit feature current --for implement "$ARGUMENTS"` and use exactly the folder
+   name it prints. If it exits with an error, show the user its message (it lists the real features)
+   and stop; do not choose a feature yourself.
 1. Check that a red ledger entry exists for this feature: `ekit gate red-recorded`.
    **If there is none, STOP** and run `__SPECKIT_COMMAND_ESDLC_RED__` first. Never write
    production behaviour before the tests that prove it have been seen failing.
@@ -23,6 +19,10 @@ strategy: wrap
    stop and say so; the fix goes through the spec (and possibly an open question).
 4. Extend the landing zone, never rewrite it: do not delete or replace behaviour in baseline modules
    (`app/core`, health, app wiring) or their tests. Add new modules and wire them in.
+   Golden landing zone: all code for this feature goes in its package (`ekit feature package <feature>`),
+   its router is registered in `src/app/features/registry.py`, templates in
+   `src/app/templates/features/<slug>/`, migrations in `migrations/versions/`. The core and the shared
+   test helpers are frozen (`GREEN-GOLDEN-INTACT` fails on any change to them).
 5. If an edit is refused by a permission rule (frozen tests, ekit files), stop and report it. Never route around it
    with shell commands.
 6. Work in slices of two or three scenarios; run `ekit run acceptance` after each slice.

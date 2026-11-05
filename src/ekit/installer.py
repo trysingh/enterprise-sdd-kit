@@ -112,6 +112,10 @@ def render_agents_block(project: Project) -> str:
         r = (prof.data.get("agent_rules") or "").strip()
         if r:
             rules.append(f"### {prof.id} (code root: `{project.rel(prof.root) or '.'}`)\n\n{r}")
+    from . import golden
+    g = golden.for_project(project)
+    if g is not None and g.agent_rules:
+        rules.insert(0, f"### Golden landing zone ({g.stack} {g.version})\n\n{g.agent_rules}")
     return (tpl.replace("{stack}", f"{project.stack_id} — {project.stack.get('description', '')}")
                .replace("{profiles}", ", ".join(p.id for p in project.profiles))
                .replace("{agent_rules}", "\n\n".join(rules)))
@@ -212,6 +216,30 @@ def seed_constitution(project: Project) -> None:
     say("  seeded .specify/memory/constitution.md with the enterprise constitution template")
 
 
+def choose_baseline(given: str | None, kit: kitsource.Kit, stack: str, mode: str, interactive: bool) -> str:
+    """0.3.0: `golden` (install the kit's pre-built landing zone) or `generate` (/speckit.esdlc.baseline builds one)."""
+    from . import golden
+    has_golden = golden.for_stack(kit, stack) is not None
+    if given:
+        if given not in ("golden", "generate"):
+            raise EkitError("--baseline must be 'golden' or 'generate'.")
+        if given == "golden" and not has_golden:
+            raise EkitError(f"The kit has no golden landing zone for {stack}; use --baseline generate.")
+        if given == "golden" and mode == "brownfield":
+            raise EkitError("The golden landing zone is for new projects; this folder already has code. "
+                            "Use --baseline generate (the baseline command then assesses what exists).")
+        return given
+    if not has_golden or mode == "brownfield":
+        return "generate"
+    if not interactive:
+        return "golden"
+    return ask_choice(
+        f"Landing zone for {stack}?",
+        [("golden", "install the kit's reviewed, pre-built landing zone (recommended; core frozen)"),
+         ("generate", "let /speckit.esdlc.baseline generate one with your model")],
+    )
+
+
 def write_project_file(root: Path, stack: str, mode: str, integration: str) -> None:
     path = root / EKIT_DIR / PROJECT_FILE
     data = load_yaml(path) if path.is_file() else {}
@@ -229,7 +257,8 @@ def write_project_file(root: Path, stack: str, mode: str, integration: str) -> N
 
 # --------------------------------------------------------------------------- commands
 def init(target: str, *, stack: str | None, source: str | None, integration: str,
-         force: bool, interactive: bool, extra_specify: list[str]) -> Path:
+         force: bool, interactive: bool, extra_specify: list[str],
+         baseline: str | None = None, name: str | None = None) -> Path:
     here = target in (".", "")
     root = Path.cwd() if here else Path(target).resolve()
     src = kitsource.resolve(choose_source(source, interactive))
@@ -242,6 +271,7 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
             for p in root.iterdir()
         )
         mode = "brownfield" if has_code else "greenfield"
+        baseline_mode = choose_baseline(baseline, kitsource.Kit.load(src.kit_path), stack, mode, interactive)
         say(f"\n==> Spec Kit ({mode})")
         script_flag = ["--script", "py"]           # Python scripts: identical on Windows and POSIX
         ni = [] if interactive else ["--non-interactive"]
@@ -261,18 +291,41 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
         lock = kitsource.vendor(root, src)
         say(f"  kit {lock['kit']['version']} from {kitsource.source_string(lock)} -> .ekit/kit (sha256 {lock['sha256'][:12]}…)")
         write_project_file(root, stack, mode, integration)
+        set_baseline_mode(root, baseline_mode)
     finally:
         src.cleanup()
 
     project = Project.load(root)
     say("\n==> Installing Spec Kit extension + preset")
     install_speckit_components(project)
+    if baseline_mode == "golden":
+        say("\n==> Golden landing zone")
+        install_golden(project, name=name)
     say("\n==> OpenCode rules and agents")
     install_opencode_assets(project)
     scaffold(project)
     apply_edit_protection(project)
     next_steps(project)
     return root
+
+
+def set_baseline_mode(root: Path, mode: str, version: str | None = None) -> None:
+    path = root / EKIT_DIR / PROJECT_FILE
+    data = (load_yaml(path) if path.is_file() else {}) or {}
+    data["baseline"] = {"mode": mode, **({"golden_version": version} if version else {})}
+    dump_yaml(data, path)
+
+
+def install_golden(project: Project, *, name: str | None = None, run_post: bool = True) -> None:
+    """Copy the golden tree, fingerprint it, ratify the constitution deterministically, freeze the core."""
+    from . import constitution, freeze, golden
+    lock = golden.install(project, project_name=name, run_post=run_post, say=say)
+    set_baseline_mode(project.root, "golden", lock["version"])
+    project = Project.load(project.root)
+    for note in constitution.ratify(project, name=lock["project_name"]):
+        say(f"  constitution: {note}")
+    freeze.freeze_baseline(project.root, list(lock["frozen"]))
+    say(f"  golden core frozen against agent edits ({len(lock['frozen'])} pattern(s) in opencode.json)")
 
 
 def sync(project: Project) -> None:
@@ -313,6 +366,11 @@ def upgrade(root: Path, source: str | None) -> None:
     lock = kitsource.read_lock(root) or {}
     src_str = source or (kitsource.source_string(lock) if lock else "bundled")
     old = (lock.get("kit") or {}).get("version")
+    from . import golden
+    try:   # keep the current golden revision aside: it is the merge base once the new kit is vendored
+        old_golden = golden.snapshot(golden.for_project(Project.load(root)))
+    except EkitError:
+        old_golden = None   # e.g. an older kit this CLI refuses to load; such projects have no golden core
     src = kitsource.resolve(src_str)
     try:
         new_lock = kitsource.vendor(root, src)
@@ -324,10 +382,46 @@ def upgrade(root: Path, source: str | None) -> None:
     if new_lock["source"]["kind"] == "bundled":
         say("  note: source 'bundled' means the kit shipped inside the CLI you are running now, "
             "so the CLI version also decides the kit version")
-    sync(Project.load(root))
+    project = Project.load(root)
+    new_golden = golden.for_project(project)
+    if new_golden is not None:
+        report = golden.merge_upgrade(root, old_golden, new_golden, say=say)
+        set_baseline_mode(root, "golden", new_golden.version)
+        project = Project.load(root)
+        if any(report.values()):
+            say(f"Golden landing zone -> {new_golden.version} (three-way merge onto your files):")
+            for kind in ("updated", "added", "merged", "conflicts", "removed", "kept"):
+                if report[kind]:
+                    say(f"  {kind:<9} {', '.join(report[kind])}")
+            if report["conflicts"]:
+                say("  !! resolve the <<<<<<< / >>>>>>> markers, review, then `ekit baseline accept --reason \"...\"`; "
+                    "`ekit gate baseline` fails until then (BASE-GOLDEN-INTACT)")
+        from . import freeze
+        freeze.freeze_baseline(root, new_golden.frozen)
+    if old_golden is not None:
+        shutil.rmtree(old_golden.parent, ignore_errors=True)
+    sync(project)
 
 
 def next_steps(project: Project) -> None:
+    from . import golden
+    if golden.is_golden(project):
+        say(f"""
+Done. Stack: {project.stack_id} ({', '.join(p.id for p in project.profiles)}), golden landing zone installed.
+The constitution is ratified (principles I-VIII from the kit; add project principles IX+ with
+/speckit.constitution) and the golden core is frozen against agent edits.
+
+Next, in a terminal in {project.root}:
+  ekit run install && ekit gate baseline     # creates .venv from uv.lock, records the landing zone
+  git add -A && git commit -m "chore: golden landing zone"
+Then inside `opencode`:
+  1. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions
+  2. /speckit.esdlc.questions       resolve blocking questions (or `ekit questions export`)
+  3. /speckit.specify FEAT-01 -> /speckit.esdlc.gherkin -> /speckit.plan -> /speckit.tasks
+     -> /speckit.esdlc.red -> /speckit.implement
+
+`ekit baseline status` shows the golden core; `ekit status` the pipeline.""")
+        return
     say(f"""
 Done. Stack: {project.stack_id} ({', '.join(p.id for p in project.profiles)})
 
@@ -378,6 +472,15 @@ def doctor(project: Project | None) -> int:
     from . import landing
     lz_state, lz_detail = landing.status(project)
     row(lz_state != "stale", "landing zone (ekit gate baseline)", lz_detail)
+    from . import constitution, golden
+    c_state, c_details = constitution.principles_drift(project)
+    row(c_state in ("intact", "unratified"), "constitution principles I-VIII", c_state if not c_details else f"{c_state}: {c_details[0]}")
+    if golden.is_golden(project):
+        glock = golden.read_lock(project.root) or {}
+        found = golden.drift(project.root)
+        row(bool(glock), "golden landing zone", f"{glock.get('stack')} {glock.get('version')}" if glock else f"missing {golden.LOCK}")
+        row(not found, "golden core intact", "matches .ekit/golden.lock.yaml" if not found
+            else f"{len(found)} file(s): {', '.join(d.rel for d in found[:4])} (`ekit baseline drift`)")
     say("\nWaves and model routing (optional)")
     from . import models, waves
     mode = waves.project_mode(project.root)

@@ -5,14 +5,14 @@ apiVersion: ekit/v1
 kind: Kit
 metadata:
   name: enterprise-sdd-kit
-  version: 0.2.5          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
+  version: 0.3.0          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
   description: >-
     BRD > PRD > SDD > TDD landing zone for GitHub Spec Kit + OpenCode with a
     generic enterprise engineering baseline and locally enforced gates.
 
 requires:
   speckit: ">=1.0.0"
-  ekit: ">=0.2.5,<0.3"     # lower: check types this kit uses; upper: CLI check logic this kit was tested with
+  ekit: ">=0.3.0,<0.4"     # lower: check types this kit uses; upper: CLI check logic this kit was tested with
   python: ">=3.11"
 
 components:
@@ -23,14 +23,16 @@ components:
   opencode: opencode                        # AGENTS.md block + agents
   waves_policy: policy/waves.policy.yaml   # optional wave planning: non-deferrable NFRs, file locations
   models_policy: policy/models.policy.yaml # optional model routing: command/agent -> tier
+  golden: golden                           # 0.3.0: pre-built landing zones per stack (stacks.<id>.golden)
 
-# A stack is a backend profile + a frontend profile.
+# A stack is a backend profile + a frontend profile, optionally with a golden landing zone.
 # `roots` says where each profile's code lives; profile commands run from that root.
 stacks:
   fastapi-jinja:
     description: FastAPI backend, server-rendered Jinja2 templates (single deployable)
     profiles: [backend/fastapi, frontend/jinja]
     roots: {backend: ".", frontend: "."}
+    golden: golden/fastapi-jinja     # 0.3.0: `ekit init` installs it unless --baseline generate
   fastapi-react:
     description: FastAPI JSON API + React (Vite, TypeScript) SPA
     profiles: [backend/fastapi, frontend/react]

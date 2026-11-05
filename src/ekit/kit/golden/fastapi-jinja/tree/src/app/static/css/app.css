@@ -1,0 +1,9 @@
+/* PERF-02: no framework. UX-01: visible focus, sufficient contrast, skip link. */
+:root { --fg: #1b1f24; --bg: #ffffff; --accent: #0b5cad; font-family: system-ui, sans-serif; }
+body { margin: 0; color: var(--fg); background: var(--bg); line-height: 1.5; }
+main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
+.site-header { display: flex; gap: 1rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid #d0d7de; }
+.brand { font-weight: 600; }
+.skip-link { position: absolute; left: -999px; }
+.skip-link:focus { left: 1rem; top: 1rem; background: var(--bg); padding: .5rem; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
