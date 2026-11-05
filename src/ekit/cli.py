@@ -59,8 +59,15 @@ def cmd_fix_red(args: argparse.Namespace) -> int:
     clean, report = fixred.fix_red(project, feature, args.reason)
     print(report)
     if not clean:
-        print(f"\n{feature}: still not a clean red (see above) — production source has been restored either way. "
-              f"Fix the test further and run `ekit fix-red {feature} --reason \"...\"` again.")
+        print(f"\n{feature}: still not a clean red (see above) — production source has been restored either way.\n"
+              "If the error above names something other than AssertionError, the revert most likely went back "
+              "further than this fix needs: it reverts the feature's WHOLE production source directory to its "
+              "last-red commit, which can also strip out shared code other features added since (or an earlier "
+              "shape this feature's own later work changed) that the fixed test now legitimately depends on. "
+              "If so, revert only the specific file(s) this feature's test actually exercises by hand instead "
+              "(`git checkout <an earlier commit> -- <that one file>`, `ekit gate red`, review, restore, commit) "
+              "rather than the whole source tree. Otherwise, fix the test further and run "
+              f"`ekit fix-red {feature} --reason \"...\"` again.")
         return 1
     print(f"\n{feature}: clean red, re-frozen, production source restored. Review the test diff, then:\n"
           f"  git add -A && git commit -m \"test({feature.split('-', 1)[0]}): red (...)\"\n"

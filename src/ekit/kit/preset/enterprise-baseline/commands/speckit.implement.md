@@ -5,9 +5,13 @@ strategy: wrap
 
 ## Enterprise pre-flight
 
-0. Active feature: use the feature named in `$ARGUMENTS` (`001-user-admin`, `001`). If none is named,
-   run `ekit status` and take the one feature whose `red` column is `ok` and `green` is `--`; if several
-   qualify, ask once which. Do not guess.
+0. Active feature: if `$ARGUMENTS` actually names a feature — a folder name (shape: `NNN-slug`) or
+   just its number (shape: `NNN`) — use that one. `001-user-admin` and `001` above are only examples
+   of that *shape*, not real features in this project; never treat them as the feature to implement
+   just because `$ARGUMENTS` is empty or unclear. If `$ARGUMENTS` names nothing real, run `ekit status`
+   yourself and take the one feature whose `red` column is `ok` and `green` is `--`; if several
+   qualify, ask once which; if none do, say so and stop. Do not guess, and never fall back to an
+   example name.
 1. Check that a red ledger entry exists for this feature: `ekit gate red-recorded`.
    **If there is none, STOP** and run `__SPECKIT_COMMAND_ESDLC_RED__` first. Never write
    production behaviour before the tests that prove it have been seen failing.

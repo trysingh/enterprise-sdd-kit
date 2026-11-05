@@ -32,6 +32,7 @@ class GateContext:
     prd_dir: Path | None = None
     verbose: bool = False
     outputs: dict[str, str] = field(default_factory=dict)  # captured command output per check
+    pending_records: list[dict[str, Any]] = field(default_factory=list)  # queued by bdd.run; see flush_pending_records
 
     def path(self, p: str) -> Path:
         q = Path(p)
@@ -710,8 +711,33 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             if rc != 0:
                 out.append(Finding("error", f"[{pid}] acceptance suite exited {rc} (another scenario or a regression is failing)"))
     if w.get("record") and not any(f.level == "error" for f in out):
-        ledger = _ledger_path(ctx)
+        # Queue the ledger write rather than doing it here: this check (bdd.run/RED-RUN or
+        # GREEN-RUN) only knows its own findings are clean, not whether a later check in the same
+        # gate (RED-CLEAN-FAILURE, in particular) is about to reject the run. Writing eagerly let a
+        # scenario that errored out of broken test glue — still reported "failed" by pytest-bdd,
+        # so RED-RUN itself saw nothing wrong — get recorded as a real red entry (and re-frozen)
+        # even though the gate's overall result was FAILED. `run_gate` calls flush_pending_records
+        # once the whole gate's result is known, and only on a pass.
         fingerprints = {_rel_posix(ctx, f): _sha(f) for f in _frozen_files(ctx, w["dir"])}
+        ctx.pending_records.append({
+            "expect": expect, "want": want, "status": status, "fingerprints": fingerprints,
+        })
+    return out
+
+
+def flush_pending_records(ctx: GateContext, results: list[Any]) -> None:
+    """Write the ledger entries (and re-freeze, for red) queued by `bdd.run` checks during this
+    gate run. Call only once the whole gate's result is known, and only when it passed — a run
+    rejected by a later check (e.g. RED-CLEAN-FAILURE) must never reach the ledger; see the note
+    in `bdd_run` above. Appends its notes as info findings on the originating CheckResult, same
+    place they used to come from when this was done eagerly."""
+    # Only one `bdd.run` check appears per gate (RED-RUN in `red`, GREEN-RUN in `green`), so the
+    # type alone identifies which CheckResult a queued record's notes belong to.
+    bdd_run_results = [r for r in results if r.type == "bdd.run"]
+    for rec in ctx.pending_records:
+        expect, want, status, fingerprints = rec["expect"], rec["want"], rec["status"], rec["fingerprints"]
+        cr = bdd_run_results[0] if bdd_run_results else None
+        ledger = _ledger_path(ctx)
         data = load_yaml(ledger) if ledger.is_file() else {"feature": ctx.feature_dir.name, "entries": []}
         data.setdefault("entries", []).append({
             "phase": expect,
@@ -726,16 +752,18 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             "fingerprints": fingerprints,
         })
         dump_yaml(data, ledger)
-        out.append(Finding("info", f"recorded {expect} for {len(want)} scenario(s) in {ctx.project.rel(ledger)}"))
+        if cr is not None:
+            cr.findings.append(Finding("info", f"recorded {expect} for {len(want)} scenario(s) in {ctx.project.rel(ledger)}"))
         if expect == "red":
             from . import freeze
             try:
                 rules = freeze.freeze_feature(ctx.project.root, ctx.feature_dir.name, fingerprints)
-                out.append(Finding("info", f"froze {len(fingerprints)} file(s) against agent edits in opencode.json ({len(rules)} deny rules); "
-                                           f"restart OpenCode to apply; lift with `ekit unfreeze {ctx.feature_dir.name} --reason \"...\"`"))
+                if cr is not None:
+                    cr.findings.append(Finding("info", f"froze {len(fingerprints)} file(s) against agent edits in opencode.json ({len(rules)} deny rules); "
+                                               f"restart OpenCode to apply; lift with `ekit unfreeze {ctx.feature_dir.name} --reason \"...\"`"))
             except EkitError as exc:
-                out.append(Finding("warn", f"could not freeze the red tests in opencode.json: {exc}"))
-    return out
+                if cr is not None:
+                    cr.findings.append(Finding("warn", f"could not freeze the red tests in opencode.json: {exc}"))
 
 
 _CLEAN_RED_DEFAULT = ("AssertionError",)

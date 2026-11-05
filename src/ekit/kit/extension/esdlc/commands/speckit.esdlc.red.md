@@ -19,8 +19,12 @@ $ARGUMENTS
 
 ## Active feature
 
-Use the feature named in `$ARGUMENTS` (`001-user-admin`, `001`). If none is named, run `ekit status`
-and take the one feature whose `scen` column is `ok` and `red` is `--`; if several qualify, ask once which.
+If `$ARGUMENTS` actually names a feature — a folder name (shape: `NNN-slug`) or just its number
+(shape: `NNN`) — use that one. `001-user-admin` and `001` above are only examples of that *shape*,
+not real features in this project; never treat them as the feature to implement just because
+`$ARGUMENTS` is empty or unclear. If `$ARGUMENTS` names nothing real, run `ekit status` yourself
+and take the one feature whose `scen` column is `ok` and `red` is `--`; if several qualify, ask
+once which; if none do, say so and stop. Do not guess, and never fall back to an example name.
 
 ## Steps
 

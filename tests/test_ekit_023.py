@@ -168,4 +168,4 @@ def test_source_dirs_and_patterns_for_fastapi_jinja(tmp_path):
 
 def test_bundled_kit_requires_the_023_cli():
     from ekit.project import Kit, bundled_kit_dir
-    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.3,<0.3"
+    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.5,<0.3"

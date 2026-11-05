@@ -4,11 +4,12 @@ This guide covers running the Enterprise SDD Kit (`ekit`) on POSIX systems (Linu
 WSL2) when GitHub Spec Kit (`specify`) and OpenCode already work on the machine. It also
 explains how to measure the kit against plain Spec Kit.
 
-> **Status:** ekit 0.2.3 / kit 0.2.3. The MVP1 pipeline is verified on Linux against Spec Kit 1.2.7 and has been
+> **Status:** ekit 0.2.5 / kit 0.2.5. The MVP1 pipeline is verified on Linux against Spec Kit 1.2.7 and has been
 > exercised on macOS with FastAPI + pytest-bdd. Treat the first project on any other stack as the pilot. The
 > optional waves and model tiers added in 0.2.0 are covered by unit and CLI tests but have not yet run against a
-> live Spec Kit + OpenCode install (see *I* and *J*); 0.2.2's clean-failure check and narrow unfreeze, and 0.2.3's
-> `ekit fix-red`, haven't either, though all three were written for gaps found live on 0.2.0 (see *6. Troubleshooting*).
+> live Spec Kit + OpenCode install (see *I* and *J*); 0.2.2's clean-failure check and narrow unfreeze, 0.2.3's
+> `ekit fix-red`, 0.2.4's fix for a way `fix-red` could poison its own ledger reference, and 0.2.5's active-feature
+> wording fix, haven't either, though all five were written for gaps found live on 0.2.0 (see *6. Troubleshooting*).
 
 ---
 
@@ -353,6 +354,11 @@ ekit fix-red 001-user-admin --reason "step wording typo, JIRA-123"
 If the report it prints still isn't clean, fix the test glue further and run it again; once it is, review the
 test diff and commit yourself, same as step 6 above. It's denied to the agent's shell tool, same as
 `ekit unfreeze` — a person decides this, not the agent.
+
+If the failure it reports isn't a plain `AssertionError`, read the message `ekit fix-red` prints: the revert is
+scoped to the feature's whole production source directory, which on a project with more than one feature
+sharing that directory can reach back further than this particular fix needs. The message explains the
+narrower, manual alternative (revert just the specific file(s) by hand) for that case.
 
 The commit after step 7:
 

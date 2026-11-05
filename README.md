@@ -1,4 +1,4 @@
-# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.2.3)
+# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.2.5)
 
 One command turns a new or existing repository into an enterprise landing zone for
 **GitHub Spec Kit + OpenCode**, running a deterministic
@@ -50,7 +50,7 @@ commands (no shell), `{mvnw}` → `mvnw.cmd` on Windows / `./mvnw` elsewhere, an
 |---|---|---|
 | `bundled` | `--source bundled` | trying it out; offline |
 | local folder | `--source D:\kits\enterprise-sdd-kit` | a clone of your org's kit repo |
-| git | `--source git+https://git.example.com/eng/sdd-kit.git@v0.2.3` | teams; pin a tag |
+| git | `--source git+https://git.example.com/eng/sdd-kit.git@v0.2.5` | teams; pin a tag |
 
 You can also set `EKIT_KIT_SOURCE`. Whatever the source, the kit is **copied into
 `.ekit/kit` and pinned** in `.ekit/kit.lock.yaml` (source, tag, commit, sha256). Commit both:
@@ -62,7 +62,7 @@ vendored kit; `ekit upgrade [--source …]` re-fetches, re-pins and re-applies.
 | Part | Where it lives | Pinned by | Changes when |
 |---|---|---|---|
 | **Rules**: gate policy, NFR catalogue, stack profiles, templates, agent rules | `.ekit/kit/` in the repository (committed) | `.ekit/kit.lock.yaml`: source, resolved commit, sha256 | someone runs `ekit upgrade` and commits the result |
-| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.3,<0.3`) | a developer reinstalls the CLI |
+| **Check engine**: the `ekit` CLI that reads those rules and judges the files (`checks.py`, `gates.py`, step scan, fingerprints) | each machine's uv tool folder | `ekit.version` in `.ekit/kit.lock.yaml` (since ekit 0.1.4), plus the kit's allowed range `requires.ekit` (e.g. `>=0.2.5,<0.3`) | a developer reinstalls the CLI |
 
 Both parts decide a gate result. Identical rules judged by two different CLI versions can disagree,
 because check logic changes between releases (0.1.1 changed how tags are read, 0.1.2 added
@@ -71,8 +71,8 @@ because check logic changes between releases (0.1.1 changed how tags are read, 0
 
 - **One CLI version per project.** `ekit init` and `ekit upgrade` record the running CLI version in the lock.
   Everyone, and CI, installs exactly that version.
-- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.3`; one tag then fixes both the CLI
-  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.3`.
+- **Install by tag.** Tag the kit repository with the CLI version (e.g. `v0.2.5`; one tag then fixes both the CLI
+  and the kit it ships) and install it with `uv tool install --force git+https://…/sdd-kit.git@v0.2.5`.
 - **Mismatch is visible.** `ekit doctor` fails the row *ekit CLI matches the project pin*, `ekit status` prints a
   `!!` line, and every gate report (text, JSON and JUnit) carries a note naming both versions.
 - **CI refuses to judge with the wrong CLI.** Set `EKIT_REQUIRE_PINNED_CLI=1` in the pipeline: a gate then exits 2
@@ -307,7 +307,7 @@ ekit gate all
 ekit sync                   # re-apply pinned kit (after editing nothing but wanting a refresh)
 ekit freeze [feature]        # re-apply edit protection for a red feature (gate red does it)
 ekit unfreeze [feature] --reason "..."   # lift it, audited in .ekit/freeze.yaml
-ekit upgrade --source git+https://…@v0.2.3
+ekit upgrade --source git+https://…@v0.2.5
 EKIT_REQUIRE_PINNED_CLI=1 ekit gate green   # CI: refuse to judge with a CLI other than the pinned one
 ekit wave [status|init|validate|scope FEAT-xx]   # optional waves (approve / advance / decline: a person)
 ekit models [show|setup|off]                     # optional model tiers (a person)
@@ -353,6 +353,8 @@ docs/design/              design notes per release
 | 0.2.1 | 0.2.1 | Found on the first real project: `RED-STEPS-BOUND` / `GREEN-STEPS-BOUND` (pytest-bdd: every step has a visible definition of the right keyword type), `REDREC-COMMITTED` / `GREEN-RED-COMMITTED` (red evidence committed as recorded), `BASE-ADR-UNIQUE` / `PLAN-ADR-UNIQUE`, baseline pass recorded and shown in `ekit status` (with `000-*` smoke scenarios listed apart from features) and `ekit doctor`. Requires `ekit >=0.2.1,<0.3`. |
 | 0.2.2 | 0.2.2 | Found fixing a 0.2.1-flagged bug on the same project: `RED-CLEAN-FAILURE` rejects a scenario that errored (broken test glue) rather than failed on an assertion, even though pytest-bdd reports both as `failed`; `ekit unfreeze` now denies the feature's production source dir by default while its tests are unfrozen (`--allow-src` to skip), re-allowed the moment it's re-frozen, so fixing a frozen test can't turn into unrelated implementation work. Command text and the AGENTS.md block both say step functions must be self-contained and that an unfreeze-fix touches only the named test file. Requires `ekit >=0.2.2,<0.3`. Design: `docs/design/0.2.2-clean-red-and-narrow-unfreeze.md`. |
 | 0.2.3 | 0.2.3 | Found applying a 0.2.2-flagged fix by hand on the same project (a patch applied outside the agent's edit tool, caught correctly by `GREEN-TESTS-UNCHANGED`, then fixed with a manual unfreeze/revert/red/restore cycle): `ekit fix-red <feature> --reason "..."` automates that cycle — unfreeze, revert the feature's production source to its last-red commit (not `git stash`, which has nothing to grab once that source is already committed), run `ekit gate red`, restore the source either way — without ever committing. Denied to the agent's shell tool, same as `ekit unfreeze`. Requires `ekit >=0.2.3,<0.3`. Design: `docs/design/0.2.3-fix-red.md`. |
+| 0.2.4 | 0.2.4 | Found running `ekit fix-red` on the same project: a run rejected by `RED-CLEAN-FAILURE` (an errored scenario, not a clean assertion failure) still recorded a red ledger entry and re-froze the feature, because `RED-RUN`'s own findings were already clean before `RED-CLEAN-FAILURE`, a later check in the same gate, got to reject the run — poisoning the ledger's "last red" reference for any later `fix-red` / `gate red` on that feature. The ledger write (and re-freeze) is now queued and only flushed once the whole gate has actually passed. `ekit fix-red`'s failure message also now explains the separate, structural limit that a non-assertion failure after a revert usually means the revert (which touches the feature's whole production source directory) reached back further than this fix needs, and suggests reverting just the specific file(s) by hand instead. Requires `ekit >=0.2.4,<0.3`. Design: `docs/design/0.2.4-defer-red-ledger-write.md`. |
+| 0.2.5 | 0.2.5 | Found mid-`/speckit.implement` on the same project: an agent treated the illustrative example in a command's "active feature" step (`001-user-admin`, `001`) as a real feature to fall back to when `$ARGUMENTS` was empty. `speckit.implement.md` and `speckit.esdlc.red.md` now say explicitly that those examples show only the *shape* of a feature name, name them, and say never to fall back to one — always run `ekit status` instead. Wording-only; no CLI change. Requires `ekit >=0.2.5,<0.3`. |
 
 Upgrade: `uv tool install --reinstall ./enterprise-sdd-kit` (or `--force git+…@<tag>`), then in each project
 `ekit upgrade` and commit `.ekit/`. Projects vendored before 0.1.4 have no CLI pin: `ekit doctor` says so until
@@ -380,6 +382,15 @@ Moving to 0.2.3 changes nothing by itself — `ekit fix-red` is a new, opt-in co
 `permission.bash` deny rule for it; restart OpenCode after `ekit upgrade`). Use it instead of the manual
 unfreeze/revert/red/restore cycle the next time a frozen test's own glue, not the implementation, is wrong.
 
+Moving to 0.2.4 changes nothing for a project that has never had a red run rejected by `RED-CLEAN-FAILURE`
+after `RED-RUN` itself passed. If one has: check `.ekit/ledger/<feature>.yaml` for an entry that doesn't
+actually belong (recorded moments before a `RED-CLEAN-FAILURE` rejection in the same `ekit gate red` /
+`ekit fix-red` run) and remove it by hand before trusting that feature's "last red" again.
+
+Moving to 0.2.5 changes nothing — it's a wording fix to two command templates. If an agent has ever
+picked `001-user-admin` (or any other obviously-not-real feature) as the active feature when you gave
+it no `$ARGUMENTS`, that's the bug this fixes; nothing to do beyond upgrading.
+
 ## Status of MVP1
 
 Verified against Spec Kit 1.2.7 (source build) on Linux: greenfield `init`, brownfield `adopt`,
@@ -391,9 +402,17 @@ exercised: Windows hosts, the Spring Boot and React toolchains, and agent output
 which can loop or rewrite baseline code; the gates catch it, they do not prevent it.
 
 0.2.0 (waves, model tiers), 0.2.1 (step binding, committed evidence, landing-zone status), 0.2.2
-(clean-failure check, narrow unfreeze) and 0.2.3 (`ekit fix-red`) are covered by unit and CLI tests. 0.2.1's gap
-(a scenario frozen while actually erroring, not failing cleanly), 0.2.2's fix for it, and 0.2.3's automation of
-the fix-it cycle it created were all found debugging the same real project on 0.2.0, which is still the only
-version run end-to-end against a live Spec Kit + OpenCode install; 0.2.2 and 0.2.3 themselves have not. Confirm
+(clean-failure check, narrow unfreeze), 0.2.3 (`ekit fix-red`), 0.2.4 (deferred ledger recording) and 0.2.5
+(active-feature wording) are covered by unit and CLI tests (0.2.5's are wording-presence checks; it can't
+test agent comprehension, only that the kit's own text says the right thing). 0.2.1's gap (a scenario frozen
+while actually erroring, not failing cleanly), 0.2.2's fix for it, 0.2.3's automation of the fix-it cycle it
+created, 0.2.4's fix for a way *that* automation could itself poison the ledger, and 0.2.5's fix for an agent
+falling back to a command template's own illustrative example were all found debugging the same real project
+on 0.2.0, which is still the only version run end-to-end against a live Spec Kit + OpenCode install; 0.2.2
+through 0.2.5 themselves have not. `ekit fix-red` also has a known, undefended limit: reverting a feature's
+whole production source directory to its last-red commit can reach back further than the fix needs on a
+project with several features sharing that directory (it can strip out shared code added since, or an
+earlier shape this feature's own later work changed) — the fix's own failure message explains the narrower
+manual alternative. Confirm
 on the first project you upgrade that Spec Kit writes its OpenCode commands to `.opencode/commands/`
 (or `.opencode/command/`) and that `ekit models show` lists them without "(no file under .opencode/)".

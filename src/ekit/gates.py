@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
+from . import checks as checks_mod
 from .checks import REGISTRY, Finding, GateContext
 from .kitsource import cli_pin
 from .project import EkitError, Project, load_yaml
@@ -182,6 +183,8 @@ def run_gate(
         results.append(cr)
 
     res = GateResult(gate_id, gate.get("description", ""), mapping, results)
+    if res.passed and ctx.pending_records:
+        checks_mod.flush_pending_records(ctx, results)
     if gate.get("record") and res.passed:
         from . import landing
         if landing.record(project, str(gate["record"])):

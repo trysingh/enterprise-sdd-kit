@@ -4,11 +4,12 @@ This guide covers running the Enterprise SDD Kit (`ekit`) on Windows when GitHub
 (`specify`) and OpenCode already work on the machine. It also explains how to measure the
 kit against plain Spec Kit.
 
-> **Status:** ekit 0.2.3 / kit 0.2.3. The MVP1 pipeline was verified on Linux against Spec Kit 1.2.7, and has since
-> run on Windows with FastAPI + pytest-bdd against a real project (that run is what found the gaps 0.2.1, 0.2.2
-> and 0.2.3 fix — see *6. Troubleshooting*). The optional waves and model tiers added in 0.2.0, 0.2.2's
-> clean-failure check and narrow unfreeze, and 0.2.3's `ekit fix-red`, are covered by unit and CLI tests but have
-> not yet run against a live Spec Kit + OpenCode install (see *I* and *J*).
+> **Status:** ekit 0.2.5 / kit 0.2.5. The MVP1 pipeline was verified on Linux against Spec Kit 1.2.7, and has since
+> run on Windows with FastAPI + pytest-bdd against a real project (that run is what found the gaps 0.2.1 through
+> 0.2.5 fix — see *6. Troubleshooting*). The optional waves and model tiers added in 0.2.0, 0.2.2's
+> clean-failure check and narrow unfreeze, 0.2.3's `ekit fix-red`, 0.2.4's ledger-recording fix, and 0.2.5's
+> active-feature wording fix are covered by unit and CLI tests but have not yet run against a live Spec Kit +
+> OpenCode install (see *I* and *J*).
 
 ---
 
@@ -332,6 +333,11 @@ ekit fix-red 001-user-admin --reason "step wording typo, JIRA-123"
 If the report it prints still isn't clean, fix the test glue further and run it again; once it is, review the
 test diff and commit yourself, same as step 6 above. It's denied to the agent's shell tool, same as
 `ekit unfreeze` — a person decides this, not the agent.
+
+If the failure it reports isn't a plain `AssertionError`, read the message `ekit fix-red` prints: the revert is
+scoped to the feature's whole production source directory, which on a project with more than one feature
+sharing that directory can reach back further than this particular fix needs. The message explains the
+narrower, manual alternative (revert just the specific file(s) by hand) for that case.
 
 The commit after step 7:
 

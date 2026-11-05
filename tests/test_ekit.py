@@ -304,7 +304,7 @@ def test_bundled_kit_declares_the_new_checks_and_matching_requirement():
     pol = Kit.load(KIT).policy()["spec"]["gates"]
     ids = {c["id"] for g in pol for c in g["checks"]}
     assert {"RED-STEPS-ASSERT", "GREEN-TESTS-UNCHANGED"} <= ids
-    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.3,<0.3"
+    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.2.5,<0.3"
 
 
 # ------------------------------------------------------------------ 0.1.3: edit protection (freeze)
@@ -520,7 +520,13 @@ def test_red_ledger_entry_records_the_cli_version(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=1, output="1 failed", cwd=tmp_path)
 
     monkeypatch.setattr(checks, "run_profile_command", fake_run)
-    out = checks.bdd_run(ctx, {"expect": "red", "dir": W["dir"], "record": True})
-    assert not [f for f in out if f.level == "error"], out
+    monkeypatch.setattr("ekit.freeze.freeze_feature", lambda *a, **k: [])
+    cr = gates.CheckResult(id="RED-RUN", type="bdd.run", severity="error")
+    cr.findings = checks.bdd_run(ctx, {"expect": "red", "dir": W["dir"], "record": True})
+    assert not [f for f in cr.findings if f.level == "error"], cr.findings
+    # bdd.run only queues the write; flush_pending_records does it, same as run_gate does once the
+    # whole gate has passed (see 0.2.4: a record must not land before a later check, e.g.
+    # RED-CLEAN-FAILURE, has had a chance to reject the run).
+    checks.flush_pending_records(ctx, [cr])
     entry = yaml.safe_load((tmp_path / ".ekit/ledger/001-demo.yaml").read_text())["entries"][-1]
     assert entry["ekit_version"] == EKIT_VERSION and entry["kit_version"] == "9.9.9"
