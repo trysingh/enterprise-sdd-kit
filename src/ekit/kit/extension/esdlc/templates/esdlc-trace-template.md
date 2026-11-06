@@ -11,4 +11,5 @@ prd: "docs/requirements/[slug]"
 prd_features: ["FEAT-01"]
 acceptance_criteria: ["AC-001", "AC-002"]
 business_requirements: ["BR-001", "BR-002"]
+# change: "CR-0007"     # 0.5.0: only when `prd` is a change-request folder (docs/requirements/cr-0007-…)
 ```

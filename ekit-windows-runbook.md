@@ -4,7 +4,7 @@ This guide covers running the Enterprise SDD Kit (`ekit`) on Windows when GitHub
 (`specify`) and OpenCode already work on the machine. It also explains how to measure the
 kit against plain Spec Kit.
 
-> **Status:** ekit 0.3.0 / kit 0.3.0. The MVP1 pipeline is verified on Linux against Spec Kit 1.2.7 and has
+> **Status:** ekit 0.5.0 / kit 0.5.0 (0.5.0 adds change requests from the prompt for brownfield work, see *D2*). The MVP1 pipeline is verified on Linux against Spec Kit 1.2.7 and has
 > run on Windows with FastAPI + pytest-bdd against a real project; that project found every gap fixed in
 > 0.2.1–0.2.5. 0.3.0 adds the **golden landing zone** for `fastapi-jinja` and structural fixes for those gaps
 > (see *C*, *K*, and `docs/design/0.3.0-golden-landing-zone.md`). Waves, model tiers and every release since
@@ -298,7 +298,80 @@ chat, then run the matching command yourself in PowerShell (the agent is not all
 to plan in waves (see *I*), or `ekit wave decline`. If waves are already on, a new or changed BRD's
 acceptance criteria must be placed in a wave and approved before they can be specified.
 
-### E. Once per feature (repeat for each `FEAT-xx` in the PRD)
+### D2. Once per change request (a bug fix or change typed in chat, 0.5.0)
+
+For brownfield work you do not need a BRD file. Type the request in OpenCode as you would in a ticket:
+
+```text
+/speckit.esdlc.change bug: after I open a chat the unread badge still shows 3 ticket=JIRA-482
+/speckit.esdlc.change add a "mark all as read" button to the conversation list
+/speckit.esdlc.change enhancement: unread badge should cap at 99+ affects=003
+```
+
+The optional prefix (`bug:`, `enhancement:`, `feature:`) fixes the type; otherwise the agent decides and asks
+if it can't tell. `ticket=` and `affects=` are optional too. The agent:
+
+1. runs `ekit change candidates "<your text>"` to find the existing feature(s) it touches;
+2. runs `ekit change new …`, which creates `docs\requirements\cr-NNNN-<slug>\` and keeps your request
+   **verbatim** in `request.md`;
+3. fills `change.yaml` (for a bug: observed, expected, reproduction; any scenario the change makes wrong under
+   `supersedes:`) and writes a small `brd.md`, `prd.md` (one `FEAT-01`) and `open-questions.yaml`;
+4. runs `ekit gate intake --prd CR-NNNN` and tells you the next step.
+
+Questions work as for a BRD, with `--prd CR-NNNN`:
+
+```powershell
+ekit questions export --prd CR-0007
+ekit gate ready --prd CR-0007
+```
+
+Then follow *E* with the change request's id instead of a `FEAT-`:
+
+```text
+/speckit.specify CR-0007        # spec folder e.g. 008-cr0007-unread-badge
+/speckit.esdlc.gherkin
+/speckit.plan
+/speckit.tasks
+/speckit.esdlc.red
+```
+
+**Do change requests follow red → green?** Yes: same commands, same gates, same commits and freeze. What red
+proves depends on the type:
+
+| Type | Red | Production code during red |
+|---|---|---|
+| `bug` | the new scenario reproduces the bug: it fails on an assertion showing the wrong behaviour | **untouched**: tests only, no stubs, no partial fix. `RED-BUG-REPRODUCED` fails red if production source differs from HEAD or a scenario fails with 501 |
+| `enhancement` | new scenarios fail | 501 stubs for new routes, in the affected feature's package (golden) |
+| `feature` | as for any feature | 501 stubs, own package |
+
+Green is the same for all three: every scenario of the change passes **and** the whole acceptance suite
+exits 0, so a fix that breaks another feature fails the gate.
+
+**If the change makes a delivered scenario wrong** (listed under `supersedes:` in `change.yaml`), green
+(`GREEN-CHANGE-SUPERSEDED`) waits for you to retire it. Remove that scenario from the delivered feature's
+`.feature` file in your editor (the agent can't), then in PowerShell:
+
+```powershell
+ekit change retire 003-chat SCN-003-04 --by CR-0007 --reason "CR-0007: badge now clears on open"
+git add -A && git commit -m "test(003): retire SCN-003-04 (CR-0007)"
+```
+
+It refuses if anything other than the named scenarios changed. It writes a `rebase` entry to
+`.ekit\ledger\003-chat.yaml` and re-freezes the feature. Restart OpenCode, then `/speckit.implement`.
+
+Check progress any time:
+
+```powershell
+ekit change list               # CR-0007  bug  red  Unread badge does not clear  -> 008-cr0007-unread-badge
+ekit change show CR-0007
+```
+
+With waves on, a change request's acceptance criteria are placed in a wave and approved like any new BRD's
+before `/speckit.specify` accepts them (see *I*). Pure refactors and dependency bumps have no behaviour that
+can fail first, so they don't go through this lane: run `ekit gate green --feature <each affected feature>`
+afterwards as the regression check.
+
+### E. Once per feature (repeat for each `FEAT-xx` in the PRD, or once per `CR-NNNN`)
 
 In OpenCode, in this order. Each command runs its own gate and stops if the gate fails. With waves on, a
 feature here is a **wave slice**: `/speckit.specify FEAT-02` includes only the ACs `ekit wave scope FEAT-02` lists
@@ -307,7 +380,7 @@ for the current wave, and a later slice of the same PRD feature becomes a new fe
 
 | # | Slash command | Gate it enforces |
 |---|---|---|
-| 1 | `/speckit.specify FEAT-01` | `ready` before, `spec` after |
+| 1 | `/speckit.specify FEAT-01` (or `CR-0007`) | `ready` before, `spec` after |
 | 2 | `/speckit.esdlc.gherkin` | `scenarios` |
 | 3 | `/speckit.clarify` *(optional)* | — |
 | 4 | `/speckit.plan` | `spec` + `scenarios` before, `plan` after |
@@ -646,6 +719,7 @@ first project, run `ekit run install`, `ekit run unit`, `ekit run acceptance`, `
 | Once per project | golden (`fastapi-jinja`): `ekit init`, `ekit run install`, `ekit gate baseline`, commit. Otherwise: `ekit init` / `ekit adopt`, `/speckit.constitution`, `/speckit.esdlc.baseline`, `ekit run install`, `ekit gate baseline` |
 | Golden core change (rare, a person) | `ekit baseline unfreeze --reason`, edit, `ekit baseline accept --reason`, `ekit gate baseline` (see *K*) |
 | Per BRD | `/speckit.esdlc.brd`, `/speckit.esdlc.questions` or `ekit questions export/import`, `ekit gate ready` |
+| Per change request (0.5.0) | `/speckit.esdlc.change <request>`, then *E* with `CR-NNNN`; a person runs `ekit change retire` if the change supersedes a delivered scenario |
 | Per feature | specify → gherkin → plan → tasks → red → *commit, restart OpenCode* → implement → *commit* → `ekit gate all` |
 | Daily | `ekit status`, `ekit gate <id>`, `ekit run <cmd>`; `ekit run install` after clone/pull of dependency changes |
 | Per wave (optional) | `ekit wave` to check progress; edit the proposal + `ekit wave approve --by` when scope changes or a BRD arrives; `ekit wave advance --by` to move on |

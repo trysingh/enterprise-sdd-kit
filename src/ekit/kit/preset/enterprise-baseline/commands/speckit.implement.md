@@ -36,6 +36,11 @@ strategy: wrap
 5. If an edit is refused by a permission rule (frozen tests, ekit files), stop and report it. Never route around it
    with shell commands.
 6. Work in slices of two or three scenarios; run `ekit run acceptance` after each slice.
+7. **Change requests** (`ekit change show --feature <feature>` prints one): change only what the request
+   needs, in the package(s) `ekit feature package <feature>` prints (golden), and keep every existing
+   scenario green: `ekit gate green` runs the whole acceptance suite, so a regression in another feature
+   fails it. If `GREEN-CHANGE-SUPERSEDED` fails, an old scenario still asserts the behaviour this change
+   replaces: stop and tell the user the `ekit change retire …` command it prints (a person runs it).
 
 {CORE_TEMPLATE}
 

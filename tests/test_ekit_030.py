@@ -71,7 +71,7 @@ def _ctx(project: Project, feature: str | None = None) -> checks.GateContext:
 # ===================================================================== kit wiring
 def test_kit_offers_golden_for_fastapi_jinja_only_and_policy_wires_the_new_checks():
     kit = Kit.load(KIT)
-    assert kit.version == "0.4.1" and kit.manifest["requires"]["ekit"] == ">=0.4.0,<0.5"
+    assert kit.version == "0.5.0" and kit.manifest["requires"]["ekit"] == ">=0.5.0,<0.6"
     assert golden.for_stack(kit, "fastapi-jinja").version == "1.0.1"
     assert all(golden.for_stack(kit, s) is None for s in kit.stacks if s != "fastapi-jinja")
     ids = {c["id"] for g in kit.policy()["spec"]["gates"] for c in g["checks"]}

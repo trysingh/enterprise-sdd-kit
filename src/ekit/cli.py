@@ -267,6 +267,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         except EkitError:
             line += " (no open-questions.yaml)"
         print(line)
+    from . import changes
+    crs = changes.summary_rows(project.root)
+    if crs:
+        print("\nChange requests (0.5.0)")
+        for r in crs:
+            if "error" in r:
+                print(f"  {r['id']}: {r['error']}")
+            else:
+                print(f"  {r['id']:<8} {r['type']:<11} {r['phase']:<6} {r['title'][:50]}"
+                      + (f"  -> {', '.join(r['features'])}" if r["features"] else ""))
     from . import freeze
     frozen = set(freeze.load_state(project.root)["frozen"])
     from . import landing
@@ -618,13 +628,79 @@ def cmd_feature(args: argparse.Namespace) -> int:
     project = Project.load()
     if args.action == "package":
         feature = features.current(project, args.name, phase="any")
-        pkg = golden.feature_package(golden.for_project(project), feature)
-        if not pkg:
+        pkgs = golden.feature_packages(project, feature)
+        if not pkgs:
             raise EkitError("Feature packages are a golden landing zone convention; this project has none.")
-        print(pkg)
+        print("\n".join(pkgs))   # 0.5.0: a bug fix or enhancement prints the affected feature's package(s)
         return 0
     print(features.current(project, args.name, phase=args.phase))
     return 0
+
+
+def cmd_change(args: argparse.Namespace) -> int:
+    """0.5.0: change requests (bug fixes, enhancements, features) taken from the prompt."""
+    from . import changes
+    project = Project.load()
+    root = project.root
+    a = args.action
+    if a == "new":
+        text = args.text
+        if args.file:
+            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8")
+        d = changes.new(root, type_=args.type, title=args.title, text=text, ticket=args.ticket, affects=args.affects)
+        data = changes.load(d)
+        print(f"{data['id']} {project.rel(d)}")
+        if changes.PLACEHOLDER in (d / "request.md").read_text(encoding="utf-8"):
+            print(f"Paste the request verbatim into {project.rel(d)}/request.md under '{changes.REQUEST_MARKER}'.")
+        return 0
+    if a == "list":
+        rows = changes.summary_rows(root)
+        if not rows:
+            print("No change requests yet (/speckit.esdlc.change <request>).")
+        for r in rows:
+            if "error" in r:
+                print(f"  {r['id']}: {r['error']}")
+                continue
+            extra = f" affects {','.join(r['affects'])}" if r["affects"] else ""
+            extra += f" supersedes {','.join(r['supersedes'])}" if r["supersedes"] else ""
+            print(f"  {r['id']:<8} {r['type']:<11} {r['phase']:<6} {r['title']}"
+                  f"{'  -> ' + ', '.join(r['features']) if r['features'] else ''}{extra}")
+        return 0
+    if a == "show":
+        if args.feature:
+            hit = changes.for_feature(root, project.resolve_feature(args.feature))
+            if not hit:
+                print("none: this feature is not a change request (ordinary PRD feature)")
+                return 0
+            d, data = hit
+        else:
+            if not args.target:
+                raise EkitError("ekit change show CR-0007   (or --feature NNN-slug)")
+            d = changes.find(root, args.target)
+            data = changes.load(d)
+        print(f"{data.get('id')} {data.get('type')}: {data.get('title')}  ({project.rel(d)})")
+        print(f"  affects: {', '.join(changes.affected_features(data)) or '-'}")
+        print(f"  supersedes: {', '.join(map(str, data.get('supersedes') or [])) or '-'}")
+        print(f"  features: {', '.join(changes.features_of(root, d)) or '- (not specified yet)'}")
+        if data.get("type") == "bug":
+            print("  red: reproduce the bug against the committed code; no stubs, no production edits (RED-BUG-REPRODUCED)")
+        return 0
+    if a == "candidates":
+        text = " ".join([args.target or "", *(args.words or [])])
+        found = changes.candidates(root, text)
+        if not found:
+            print("No existing feature matches; treat it as new, or name the feature yourself.")
+        for name, score, hits in found:
+            print(f"  {name:<32} {score:>2}  {' '.join(hits)}")
+        return 0
+    if a == "retire":
+        if not args.target or not args.words or not args.by or not args.reason:
+            raise EkitError('ekit change retire <feature> SCN-003-04 [SCN-…] --by CR-0007 --reason "..."')
+        feature = project.resolve_feature(args.target).name
+        for m in changes.retire(project, feature, list(args.words), change=args.by, reason=args.reason):
+            print(m)
+        return 0
+    raise EkitError(f"unknown action {a}")
 
 
 def cmd_adr(args: argparse.Namespace) -> int:
@@ -775,6 +851,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("name", nargs="?", help="what the user named: NNN-slug or NNN (optional)")
     sp.add_argument("--for", dest="phase", choices=["red", "implement", "any"], default="any")
     sp.set_defaults(fn=cmd_feature)
+
+    sp = sub.add_parser("change", help="change requests from the prompt (0.5.0): new | list | show | candidates | retire")
+    sp.add_argument("action", choices=["new", "list", "show", "candidates", "retire"])
+    sp.add_argument("target", nargs="?", help="show: CR-0007; retire: the feature folder whose scenario is retired; "
+                                              "candidates: first word of the request")
+    sp.add_argument("words", nargs="*", help="candidates: the request text; retire: SCN ids")
+    sp.add_argument("--type", choices=["bug", "enhancement", "feature"], help="new: kind of change")
+    sp.add_argument("--title", help="new: short title")
+    sp.add_argument("--text", help="new: the request, verbatim")
+    sp.add_argument("--file", help="new: read the request from a file, or - for stdin")
+    sp.add_argument("--ticket", help="new: tracker id, e.g. JIRA-123")
+    sp.add_argument("--affects", action="append", help="new: existing feature folder(s) it changes (repeatable or comma list)")
+    sp.add_argument("--feature", help="show: the change a feature folder implements")
+    sp.add_argument("--by", help="retire: the change request, CR-0007")
+    sp.add_argument("--reason", help="retire: why (audited)")
+    sp.set_defaults(fn=cmd_change)
 
     sp = sub.add_parser("adr", help='new "Title": create docs/adr/NNNN-title.md with the next free number')
     sp.add_argument("action", choices=["new"])

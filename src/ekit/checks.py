@@ -643,7 +643,8 @@ def tests_unchanged(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     ledger = _ledger_path(ctx)
     if not ledger.is_file():
         return []  # ledger.red_first reports the missing ledger
-    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red"]
+    # 0.5.0: a `rebase` entry (`ekit change retire`, a person) replaces the fingerprints of red
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") in ("red", "rebase")]
     if not reds:
         return []
     fp = reds[-1].get("fingerprints")
@@ -1017,7 +1018,7 @@ def red_committed(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     if git(root, "rev-parse", "--is-inside-work-tree") != "true":
         return [Finding("warn", "not a git repository: the red evidence (feature files, tests, ledger) cannot be "
                                 "verified as committed; run `git init` and commit")]
-    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red"]
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") in ("red", "rebase")]
     fp = (reds[-1].get("fingerprints") if reds else None) or {}
     missing = [rel for rel, sha in sorted(fp.items()) if not _committed_with(root, rel, sha)]
     out = []
@@ -1252,3 +1253,4 @@ def no_exemplar(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 
 
 from . import redchecks  # noqa: E402,F401
+from . import changechecks  # noqa: E402,F401

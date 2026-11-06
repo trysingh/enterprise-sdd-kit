@@ -3,8 +3,8 @@ schema_version: "1.0"
 extension:
   id: esdlc
   name: "Enterprise SDLC (BRD > PRD > SDD > TDD)"
-  version: "0.1.0"
-  description: "Adds BRD intake, open-question loop, landing-zone baseline, Gherkin scenarios and red tests, each closed by a deterministic `ekit gate`."
+  version: "0.2.0"
+  description: "Adds BRD intake, change requests from the prompt (bug / enhancement / feature), open-question loop, landing-zone baseline, Gherkin scenarios and red tests, each closed by a deterministic `ekit gate`."
   category: "process"
   effect: "read-write"
   author: "enterprise-sdd-kit"
@@ -19,6 +19,9 @@ provides:
     - name: speckit.esdlc.brd
       file: commands/speckit.esdlc.brd.md
       description: "Turn a BRD into a normalized BRD, a PRD with acceptance criteria and an open-questions register; run gate intake"
+    - name: speckit.esdlc.change
+      file: commands/speckit.esdlc.change.md
+      description: "Take a bug fix, enhancement or feature request straight from the prompt into a traced change request; run gate intake"
     - name: speckit.esdlc.questions
       file: commands/speckit.esdlc.questions.md
       description: "Work the open-questions register: answer interactively or export/import for the product manager; run gate ready"

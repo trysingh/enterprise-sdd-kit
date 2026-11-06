@@ -267,6 +267,9 @@ class Project:
         return sorted(p for p in specs.iterdir() if p.is_dir() and FEATURE_DIR_RE.match(p.name))
 
     def resolve_feature(self, explicit: str | None) -> Path:
+        if explicit and re.match(r"^(?:CR|cr)-?\d{1,4}$", explicit.strip()):
+            from . import changes
+            return changes.find(self.root, explicit)
         if explicit:
             cand = Path(explicit)
             if not cand.is_absolute():
@@ -289,6 +292,9 @@ class Project:
         )
 
     def resolve_prd(self, explicit: str | None, feature_dir: Path | None = None) -> Path:
+        if explicit and re.match(r"^(?:CR|cr)-?\d{1,4}$", explicit.strip()):
+            from . import changes
+            return changes.find(self.root, explicit)
         if explicit:
             cand = Path(explicit)
             if not cand.is_absolute():

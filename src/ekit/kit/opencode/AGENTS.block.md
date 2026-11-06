@@ -11,8 +11,9 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 |------|---------|------|
 | Landing zone (once) | `/speckit.esdlc.baseline` | `ekit gate baseline` |
 | BRD → PRD + questions | `/speckit.esdlc.brd <brd file>` | `ekit gate intake --prd docs/requirements/<slug>` |
+| Bug / change from the prompt | `/speckit.esdlc.change <request text>` | `ekit gate intake --prd CR-NNNN` |
 | Answer questions | `/speckit.esdlc.questions` | `ekit gate ready --prd …` |
-| PRD feature → spec | `/speckit.specify FEAT-01` | `ekit gate spec` |
+| PRD feature → spec | `/speckit.specify FEAT-01` (or `CR-NNNN`) | `ekit gate spec` |
 | Spec → Gherkin | `/speckit.esdlc.gherkin` | `ekit gate scenarios` |
 | Plan | `/speckit.plan` | `ekit gate plan` |
 | Tasks | `/speckit.tasks` | — |
@@ -22,6 +23,9 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 ## Non-negotiables
 
 - Never invent business facts. Unknowns go to `docs/requirements/<slug>/open-questions.yaml`.
+- A bug fix or change asked for in chat is never coded directly: it becomes a change request with
+  `/speckit.esdlc.change` and goes through the same red → green cycle. For a **bug**, red reproduces it against the
+  committed code with tests only (no stubs, no production edits; `RED-BUG-REPRODUCED`).
 - No production behaviour before `ekit gate red` has recorded failing tests for it.
 - Never edit `.feature` files or weaken assertions to make a test pass. After `ekit gate red` the feature files are
   frozen. The bound acceptance test module is frozen too under strict freeze; under split freeze (golden projects) you
@@ -44,7 +48,7 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
   you: use the folder it prints; if it fails, show its message and stop.
 - ADRs: `ekit adr new "Title"` (takes the next free number). Never number an ADR by hand.
 - Never run `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …` or
-  `ekit baseline unfreeze|accept|install`: they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
+  `ekit baseline unfreeze|accept|install` or `ekit change retire`: they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
   shell tool.)
   While a feature is unfrozen, its production source directories are usually also denied to your edit tool until
   it's re-frozen — that's by design (see the previous bullet), not a bug to work around.

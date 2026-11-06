@@ -17,7 +17,7 @@ apiVersion: ekit.policy/v1
 kind: GatePolicy
 metadata:
   name: enterprise-generic
-  version: 0.4.1
+  version: 0.5.0
 
 spec:
   defaults:
@@ -46,6 +46,9 @@ spec:
         - id: INTAKE-QUESTIONS-VALID
           type: questions.valid
           with: { file: "{prd_dir}/open-questions.yaml" }
+        - id: INTAKE-CHANGE-VALID
+          type: change.valid           # 0.5.0 (change requests only): change.yaml complete, request verbatim, affects/supersedes real
+          with: { dir: "{prd_dir}" }
 
     # ------------------------------------------------------------------ ready to specify
     - id: ready
@@ -59,6 +62,9 @@ spec:
         - id: READY-NO-PRD-TBD
           type: text.absent
           with: { file: "{prd_dir}/prd.md", patterns: ["\\[TBD", "\\[NEEDS CLARIFICATION"] }
+        - id: READY-CHANGE
+          type: change.valid           # 0.5.0 (change requests only): also no [TBD in the bug facts
+          with: { dir: "{prd_dir}", ready: true }
 
     # ------------------------------------------------------------------ spec quality
     - id: spec
@@ -181,6 +187,13 @@ spec:
         - id: RED-ROUTE-STUBBED
           type: bdd.route_stubbed      # 0.4.0 (golden): a scenario fails with 501 from a stub, never 404
           with: { dir: "{feature_dir}/features" }
+        - id: RED-BUG-REPRODUCED
+          type: change.bug_reproduced  # 0.5.0 (bug change requests): fails on an assertion against untouched, committed code
+          with: { dir: "{feature_dir}/features" }
+        - id: RED-CHANGE-SUPERSEDES
+          type: change.supersedes_retired   # 0.5.0: reminder; the person retires superseded scenarios before green
+          severity: warn
+          with: {}
 
     # ------------------------------------------------------------------ red recorded (no test run)
     - id: red-recorded
@@ -231,6 +244,9 @@ spec:
         - id: GREEN-GLUE-STILL-RED
           type: bdd.replay_red          # 0.4.0 split freeze: amended glue still fails cleanly against the red-time code
           with: { dir: "{feature_dir}/features" }
+        - id: GREEN-CHANGE-SUPERSEDED
+          type: change.supersedes_retired   # 0.5.0: superseded scenarios of delivered features are retired (`ekit change retire`)
+          with: {}
         - id: GREEN-RUN
           type: bdd.run
           with: { expect: green, dir: "{feature_dir}/features", record: true }

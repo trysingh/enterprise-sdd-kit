@@ -71,9 +71,9 @@ def _revert_scope(project: Any, feature: str) -> list[str]:
     several features could strip shared code added since (the limit 0.2.4 could only explain)."""
     from . import golden
     root = project.root
-    pkg = golden.feature_package(golden.for_project(project), feature)
-    if pkg and (root / pkg).is_dir():
-        return [pkg]
+    pkgs = [p for p in golden.feature_packages(project, feature) if (root / p).is_dir()]  # 0.5.0: a change's affected packages
+    if pkgs:
+        return pkgs
     return [d for d in freeze.source_dirs(project) if (root / d).is_dir()]
 
 

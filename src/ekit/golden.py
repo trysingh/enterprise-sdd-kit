@@ -404,6 +404,23 @@ def feature_package(golden: Golden | None, feature: str) -> str | None:
     return tpl.format(number=m.group(1), slug=m.group(2).replace("-", "_"))
 
 
+def feature_packages(project: Any, feature: str) -> list[str]:
+    """0.5.0: the package(s) a feature folder's code lives in. A change request that fixes or extends
+    existing features (change.yaml `affects.features`) works in *their* packages; a new feature, or a
+    change that affects nothing existing, in its own."""
+    g = for_project(project)
+    if g is None:
+        return []
+    from . import changes
+    hit = changes.for_feature(project.root, project.root / "specs" / feature)
+    if hit and hit[1].get("type") in ("bug", "enhancement"):
+        pkgs = [p for f in changes.affected_features(hit[1]) if (p := feature_package(g, f))]
+        if pkgs:
+            return sorted(set(pkgs))
+    own = feature_package(g, feature)
+    return [own] if own else []
+
+
 def feature_test_module(golden: Golden | None, feature: str) -> str | None:
     if golden is None:
         return None

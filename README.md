@@ -1,4 +1,4 @@
-# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.4.1)
+# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.5.0)
 
 One command turns a new or existing repository into an enterprise landing zone for
 **GitHub Spec Kit + OpenCode**, running a deterministic
@@ -11,6 +11,13 @@ ekit init my-project --stack fastapi-react      # greenfield; the landing zone i
 ekit adopt --stack springboot-vanilla           # brownfield, run inside the repo
 ```
 
+and then, in OpenCode, either a whole BRD or a single request typed in chat (0.5.0):
+
+```
+/speckit.esdlc.brd docs/inbox/Loan-BRD-v3.docx
+/speckit.esdlc.change bug: after I open a chat the unread badge still shows 3
+```
+
 This replaces the manual `specify init` / `specify integration install opencode` steps.
 
 ---
@@ -19,7 +26,7 @@ This replaces the manual `specify init` / `specify integration install opencode`
 
 | Layer | What it is | Where it ends up |
 |---|---|---|
-| **esdlc extension** | New Spec Kit commands: `/speckit.esdlc.brd`, `.questions`, `.baseline`, `.gherkin`, `.red` | `.specify/extensions/esdlc`, `.opencode/commands` |
+| **esdlc extension** | New Spec Kit commands: `/speckit.esdlc.brd`, `.change` (0.5.0), `.questions`, `.baseline`, `.gherkin`, `.red` | `.specify/extensions/esdlc`, `.opencode/commands` |
 | **enterprise-baseline preset** | Enterprise constitution; traceability + NFR sections appended to spec/plan/tasks templates; gates wrapped around core `/speckit.specify`, `.plan`, `.tasks`, `.implement` | `.specify/presets/…`, `.opencode/commands` |
 | **NFR catalogue** | 37 generic NFRs (22 platform-scope, 15 feature-scope): security, API, observability, reliability, data, runtime environment, performance, quality, delivery, UX, docs | `.ekit/kit/baseline/nfr-catalog.yaml` |
 | **Stack profiles** | Per stack: toolchain, layout, required paths, argv commands, BDD wiring, how each NFR is met, agent rules | `.ekit/kit/profiles/**` |
@@ -62,6 +69,65 @@ and `--baseline generate` opts out. Brownfield folders and the other stacks alwa
 
 `ekit baseline status` shows the revision, freeze state, drift and seams. Design and the mapping
 from each 0.2.x bug to its structural fix: `docs/design/0.3.0-golden-landing-zone.md`.
+
+## Brownfield: bug fixes and changes from the prompt (0.5.0)
+
+On an existing system most work is not a BRD; it is one request. `/speckit.esdlc.change` takes it as
+typed, with no file to create or pass:
+
+```
+/speckit.esdlc.change bug: after I open a chat the unread badge still shows 3 ticket=JIRA-482
+/speckit.esdlc.change add a "mark all as read" button to the conversation list
+/speckit.esdlc.change enhancement: unread badge should cap at 99+ affects=003
+```
+
+The agent classifies the request (`bug`, `enhancement` or `feature`; a prefix decides it), runs
+`ekit change candidates "<text>"` to find the existing features it touches (word overlap with their
+specs and scenarios, so it reads two specs rather than all of them), and runs `ekit change new`. That
+allocates `CR-NNNN` and creates a **change request**: a small PRD folder
+`docs/requirements/cr-NNNN-<slug>/` with
+
+- `request.md`: the request **verbatim**, never edited afterwards;
+- `change.yaml`: type, title, ticket, who recorded it, affected features, the scenarios it supersedes and,
+  for a bug, `observed` / `expected` / `reproduction`;
+- `brd.md`, `prd.md` (normally one `FEAT-01`) and `open-questions.yaml`, from the usual templates.
+
+`ekit gate intake --prd CR-NNNN` checks it (`INTAKE-CHANGE-VALID`), then `/speckit.specify CR-NNNN`
+creates the spec folder (`008-cr0007-unread-badge`), and the feature runs through the **same cycle and
+gates as any other**: Gherkin → plan → tasks → red → commit → implement → green. `--prd CR-0007` works
+wherever a PRD folder is accepted. `/speckit.specify` given plain free text now points to
+`/speckit.esdlc.change` instead of creating an untraced spec.
+
+### Red and green for a change
+
+| Type | What red proves | Production code at red | Green |
+|---|---|---|---|
+| `bug` | the new scenario **reproduces** the defect: it fails on an assertion that shows the observed behaviour | **untouched and committed**: no stubs, no partial fix (`RED-BUG-REPRODUCED`) | the fix, with every other scenario still green |
+| `enhancement` | new scenarios fail | 501 stubs for new routes; golden: in the **affected** feature's package | the change; superseded scenarios retired first |
+| `feature` | as for any feature | 501 stubs, own package | as for any feature |
+
+A bug's red is stronger evidence than a feature's: the failing test ran against exactly the code in
+production. `RED-BUG-REPRODUCED` fails red if any file under the production source directories differs
+from HEAD, or if a scenario fails with a 501 or `NotImplementedError`.
+
+### When a change makes a delivered scenario wrong
+
+A delivered feature's scenarios are frozen and assert the old behaviour, so green (which runs the whole
+suite) could never pass. The CR lists those scenarios under `supersedes:`; before green **a person**
+removes them from the delivered `.feature` file and runs
+
+```
+ekit change retire 003-chat SCN-003-04 --by CR-0007 --reason "CR-0007: badge now clears on open"
+```
+
+It checks that only the named scenarios were removed and every other line of the feature is unchanged,
+then writes a `rebase` entry (who, when, CR, reason, new fingerprints) to that feature's ledger and
+re-freezes it. The delivered feature's own gates judge against the rebased fingerprints from then on.
+`GREEN-CHANGE-SUPERSEDED` fails the CR's green until this is done. The agent cannot run `retire`.
+
+`ekit change list` (and a section in `ekit status`) shows every CR with its phase and spec folder.
+Design and limits (refactors have no honest red; with waves on, a CR's ACs are placed in a wave like any
+BRD's): `docs/design/0.5.0-change-lane.md`.
 
 ## Install (Windows, macOS, Linux)
 
@@ -126,8 +192,9 @@ because check logic changes between releases (0.1.1 changed how tags are read, 0
 | 0 | `/speckit.constitution` | constitution seeded with fixed principles I–VIII (golden: already ratified by `ekit init`; use it for principles IX+) | — |
 | 1 | `/speckit.esdlc.baseline` | landing-zone skeleton (greenfield), gap assessment (brownfield), or — golden — install check and gate only; `docs/engineering/baseline-conformance.md` | `baseline` |
 | 2 | `/speckit.esdlc.brd <file>` | `docs/requirements/<slug>/brd.md` (BR-###), `prd.md` (FEAT-##, AC-###), `open-questions.yaml` | `intake` |
+| 2′ | `/speckit.esdlc.change <request>` (0.5.0, instead of 2 for one bug fix or change) | `docs/requirements/cr-NNNN-<slug>/`: `request.md` (verbatim), `change.yaml`, small `brd.md` / `prd.md` / `open-questions.yaml` | `intake` |
 | 3 | `/speckit.esdlc.questions` | answers recorded, PRD updated | `ready` |
-| 4 | `/speckit.specify FEAT-01` | `spec.md` + `trace.yaml` | `ready` (before), `spec` (after) |
+| 4 | `/speckit.specify FEAT-01` (or `CR-NNNN`) | `spec.md` + `trace.yaml` | `ready` (before), `spec` (after) |
 | 5 | `/speckit.esdlc.gherkin` | `features/*.feature` tagged `@SCN-NNN-nn @AC-xxx` | `scenarios` |
 | 6 | `/speckit.plan` | plan with **Engineering Baseline Conformance** table | `plan` |
 | 7 | `/speckit.tasks` | test-first tasks linked to scenarios | — |
@@ -149,15 +216,15 @@ question must name who decided (`answered_by`): `ekit questions import` refuses 
 
 ### What the gates actually check
 
-- **intake**: files exist; BR ids present; AC ids unique; every BR cited by an AC or listed out of scope; question register valid.
-- **ready**: no open/deferred blocking question; every answered blocking question names `answered_by`; no `[TBD…]` / `[NEEDS CLARIFICATION` in the PRD.
+- **intake**: files exist; BR ids present; AC ids unique; every BR cited by an AC or listed out of scope; question register valid; change requests (0.5.0): `change.yaml` complete, request kept verbatim, affected features and superseded scenarios exist, a bug states observed and expected behaviour (`INTAKE-CHANGE-VALID`).
+- **ready**: no open/deferred blocking question; every answered blocking question names `answered_by`; no `[TBD…]` / `[NEEDS CLARIFICATION` in the PRD; no `[TBD` left in a bug's facts (`READY-CHANGE`).
 - **spec**: `trace.yaml` valid and points at real ACs; every AC referenced in `spec.md`; no clarification markers; with an approved wave plan, every AC is in the current or an earlier wave (`SPEC-WAVE-SCOPE`).
 - **scenarios**: `.feature` files parse; each scenario has exactly one `@SCN-<feature>-nn`, unique repo-wide; every AC is tagged on ≥1 scenario.
 - **plan**: ADR numbers unique; every applicable **feature-scope** NFR has a row `Addressed | N/A | Waived`; evidence/justification present; `Waived` cites an ADR (`ADR-0007` or `docs/adr/0007-….md`; a date is not an ADR reference); with an approved wave plan, `Deferred (W2)` for an NFR the plan defers until W2.
 - **baseline**: same for **platform-scope** NFRs in `baseline-conformance.md`; profile `required_paths` exist; **ENV-01** environment isolation (below); ADR numbers unique; lint runs; principles I–VIII of the constitution match the kit template (`BASE-CONSTITUTION`, since 0.3.0; unratified is a warning); golden projects: the core matches `.ekit/golden.lock.yaml` (`BASE-GOLDEN-INTACT`). A pass is recorded in `.ekit/ledger/baseline.yaml`, which `ekit status` shows as passed, stale (conformance record, kit or active profiles changed since) or not run.
-- **red**: first scans the step modules (pytest-bdd). Golden projects also: scenario state on `ScenarioContext`, never a shared dict (`RED-STATE-TYPED`); the feature neither is nor uses the reference slice (`RED-NO-EXEMPLAR`). `RED-STEPS-ASSERT`: a step whose body is `pass`, `...`, a docstring or `assert True` is an error, as is an absolute path in `scenarios()`. `RED-STEPS-BOUND`: every step of every scenario (Background included, outlines expanded) has a definition the binding module can see, with the right keyword type; a scenario that fails at an early step would otherwise hide a later step with no definition. Then runs the acceptance suite(s); every scenario of the feature appears in the Cucumber-JSON report and **fails** (a scenario that passes before implementation is an error; undefined, pending, ambiguous or **skipped** scenarios are errors, because only an observed failure proves the test can fail). Writes `.ekit/ledger/<feature>.yaml` with git HEAD and a sha256 fingerprint of the feature files and the test modules bound to them.
+- **red**: first scans the step modules (pytest-bdd). Golden projects also: scenario state on `ScenarioContext`, never a shared dict (`RED-STATE-TYPED`); the feature neither is nor uses the reference slice (`RED-NO-EXEMPLAR`). `RED-STEPS-ASSERT`: a step whose body is `pass`, `...`, a docstring or `assert True` is an error, as is an absolute path in `scenarios()`. `RED-STEPS-BOUND`: every step of every scenario (Background included, outlines expanded) has a definition the binding module can see, with the right keyword type; a scenario that fails at an early step would otherwise hide a later step with no definition. Then runs the acceptance suite(s); every scenario of the feature appears in the Cucumber-JSON report and **fails** (a scenario that passes before implementation is an error; undefined, pending, ambiguous or **skipped** scenarios are errors, because only an observed failure proves the test can fail). Bug change requests (0.5.0): production source untouched since HEAD and no scenario failing on a 501 / `NotImplementedError` (`RED-BUG-REPRODUCED`); scenarios a change supersedes but nobody retired yet are a warning (`RED-CHANGE-SUPERSEDES`). Writes `.ekit/ledger/<feature>.yaml` with git HEAD and a sha256 fingerprint of the feature files and the test modules bound to them.
 - **red-recorded** and **green**: the files fingerprinted at red, and the ledger, are committed exactly as recorded (`REDREC-COMMITTED`, `GREEN-RED-COMMITTED`).
-- **green**: golden projects: the core and shared test helpers are unchanged (`GREEN-GOLDEN-INTACT`) and the reference slice is not used (`GREEN-NO-EXEMPLAR`); red was recorded first for every scenario (a ledger status of `failed`); every step is bound (`GREEN-STEPS-BOUND`, for features recorded red before 0.2.1); the feature files and bound test modules are unchanged since red (`GREEN-TESTS-UNCHANGED`); all scenarios pass and the suites exit 0 (no regressions); unit, lint, coverage pass; SCA and unchecked tasks warn.
+- **green**: change requests: every scenario the change supersedes has been retired by a person (`GREEN-CHANGE-SUPERSEDED`); golden projects: the core and shared test helpers are unchanged (`GREEN-GOLDEN-INTACT`) and the reference slice is not used (`GREEN-NO-EXEMPLAR`); red was recorded first for every scenario (a ledger status of `failed`); every step is bound (`GREEN-STEPS-BOUND`, for features recorded red before 0.2.1); the feature files and bound test modules are unchanged since red (`GREEN-TESTS-UNCHANGED`); all scenarios pass and the suites exit 0 (no regressions); unit, lint, coverage pass; SCA and unchecked tasks warn.
 
 Output formats: `--format text|json|junit` and `--out file`. JUnit is understood by GitHub
 Actions, GitLab, Azure DevOps and Jenkins without plugins, so taking a gate to CI later is one
@@ -223,8 +290,8 @@ denied the moment `ekit unfreeze` runs and allowed again the moment the feature 
 and `ekit doctor` both show it while active.
 
 Since 0.2.0 ekit also owns `permission.bash` deny rules for the commands that record a person's decision:
-`ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …` and (0.3.0)
-`ekit baseline unfreeze|accept|install`. The
+`ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …`, (0.3.0)
+`ekit baseline unfreeze|accept|install` and (0.5.0) `ekit change retire`. The
 agent's shell tool cannot run them; it tells the user the command instead. Running them through another
 wrapper (`uv run ekit …`, a script) is not covered, and the records they write name who acted.
 
@@ -355,6 +422,9 @@ ekit baseline [status|drift]                     # golden landing zone (unfreeze
 ekit feature current [NAME] --for red|implement  # the one feature to work on, or an error listing the real ones
 ekit feature package NNN-slug                    # golden: the feature's code package
 ekit adr new "Title"                             # next free ADR number
+ekit change new --type bug|enhancement|feature --title T --text "..." [--affects NNN] [--ticket ID]   # 0.5.0
+ekit change list | show CR-0007 | show --feature NNN-slug | candidates "<request text>"
+ekit change retire NNN-slug SCN-NNN-nn --by CR-0007 --reason "..."   # a person: retire a superseded scenario
 ekit constitution ratify|check                   # fill placeholders deterministically / check I-VIII
 ```
 
@@ -400,6 +470,7 @@ docs/design/              design notes per release
 | 0.2.2 | 0.2.2 | Found fixing a 0.2.1-flagged bug on the same project: `RED-CLEAN-FAILURE` rejects a scenario that errored (broken test glue) rather than failed on an assertion, even though pytest-bdd reports both as `failed`; `ekit unfreeze` now denies the feature's production source dir by default while its tests are unfrozen (`--allow-src` to skip), re-allowed the moment it's re-frozen, so fixing a frozen test can't turn into unrelated implementation work. Command text and the AGENTS.md block both say step functions must be self-contained and that an unfreeze-fix touches only the named test file. Requires `ekit >=0.2.2,<0.3`. Design: `docs/design/0.2.2-clean-red-and-narrow-unfreeze.md`. |
 | 0.2.3 | 0.2.3 | Found applying a 0.2.2-flagged fix by hand on the same project (a patch applied outside the agent's edit tool, caught correctly by `GREEN-TESTS-UNCHANGED`, then fixed with a manual unfreeze/revert/red/restore cycle): `ekit fix-red <feature> --reason "..."` automates that cycle — unfreeze, revert the feature's production source to its last-red commit (not `git stash`, which has nothing to grab once that source is already committed), run `ekit gate red`, restore the source either way — without ever committing. Denied to the agent's shell tool, same as `ekit unfreeze`. Requires `ekit >=0.2.3,<0.3`. Design: `docs/design/0.2.3-fix-red.md`. |
 | 0.2.4 | 0.2.4 | Found running `ekit fix-red` on the same project: a run rejected by `RED-CLEAN-FAILURE` (an errored scenario, not a clean assertion failure) still recorded a red ledger entry and re-froze the feature, because `RED-RUN`'s own findings were already clean before `RED-CLEAN-FAILURE`, a later check in the same gate, got to reject the run — poisoning the ledger's "last red" reference for any later `fix-red` / `gate red` on that feature. The ledger write (and re-freeze) is now queued and only flushed once the whole gate has actually passed. `ekit fix-red`'s failure message also now explains the separate, structural limit that a non-assertion failure after a revert usually means the revert (which touches the feature's whole production source directory) reached back further than this fix needs, and suggests reverting just the specific file(s) by hand instead. Requires `ekit >=0.2.4,<0.3`. Design: `docs/design/0.2.4-defer-red-ledger-write.md`. |
+| 0.5.0 | 0.5.0 | **Change requests from the prompt (brownfield).** `/speckit.esdlc.change <request>` takes a bug fix, enhancement or feature as typed: `ekit change new` allocates `CR-NNNN` and keeps the request verbatim in `docs/requirements/cr-NNNN-<slug>/` (`request.md`, `change.yaml`), a small PRD folder every existing gate works on; `--prd CR-0007` resolves everywhere. `ekit change candidates` ranks the existing features a request touches. Same red/green cycle; a bug's red must reproduce it against untouched committed code (`RED-BUG-REPRODUCED`, no 501 stubs). A change that makes a delivered frozen scenario wrong lists it under `supersedes:`; a person retires it with `ekit change retire` (ledger `rebase` entry, re-freeze; agent-denied) and `GREEN-CHANGE-SUPERSEDED` holds green until then. Golden: a bug fix or enhancement works in the affected feature's package (`ekit feature package`, `fix-red`). `/speckit.specify` given free text points to `.change`. Design: `docs/design/0.5.0-change-lane.md`. Requires `ekit >=0.5.0,<0.6`. |
 | 0.4.1 | 0.4.1 | `GREEN-LINT` failed on Spec Kit's own scripts (`.specify/scripts/python/*.py`, E501) because the fastapi profile ran `ruff check .` over the whole repository. `lint` and `format` now pass `--extend-exclude .specify,.opencode,.ekit`, and the golden pyproject (revision 1.0.1) sets the same `extend-exclude`. Requires `ekit >=0.4.0,<0.5`. |
 | 0.4.0 | 0.4.0 | **Split freeze and action log.** Found on the intranet messenger: step functions after the first failing step never run in red, so logic errors in them (a method that doesn't exist, the wrong object or return value) surfaced only in green, in a frozen module, and needed repeated person unfreezes. Red now type-checks the feature's test module (`RED-GLUE-TYPED`) and, in golden projects, rejects 404 failures where a 501 stub was expected (`RED-ROUTE-STUBBED`). `freeze.mode: split` (default for golden projects, `strict` otherwise; `.ekit/project.yaml`) keeps `.feature` files frozen but lets the agent fix step bodies; green checks the bindings (`GREEN-CONTRACT-INTACT`), `Then` assertions and hazards (`GREEN-GLUE-NOT-WEAKENED`), new conftest or step modules (`GREEN-NO-SHADOW-GLUE`), and re-runs amended tests against the red-time code, which must still fail cleanly (`GREEN-GLUE-STILL-RED`); the diff is recorded under `.ekit/evidence/`. `ekit freeze --recontract` for features recorded red before 0.4.0. `ekit blocked` (allowed to the agent). Append-only, hash-chained action log `.ekit/logs/actions.jsonl` for every `ekit` command and, through the OpenCode plugin `.opencode/plugin/ekit-audit.js`, every agent tool call; `ekit log tail\|show\|why\|export\|verify`. Requires `ekit >=0.4.0,<0.5`. Design: `docs/design/0.4.0-split-freeze-and-action-log.md`. |
 | 0.3.0 | 0.3.0 | **Golden landing zone** for `fastapi-jinja` (revision 1.0.0) plus structural fixes for every 0.2.1–0.2.5 bug class. Typed `ScenarioContext` and a shared step library in a frozen conftest (`RED-STATE-TYPED`); the golden core and test helpers are frozen and fingerprinted (`BASE-`/`GREEN-GOLDEN-INTACT`); one package per feature, which `fix-red` reverts alone; `ekit feature current` replaces the model choosing the active feature, and no command text carries an example name; `RED-`/`GREEN-NO-EXEMPLAR`; `ekit adr new`; deterministic `ekit constitution ratify` and `BASE-CONSTITUTION`; three-way golden upgrades. `ekit init --baseline golden\|generate`. Requires `ekit >=0.3.0,<0.4`. Design: `docs/design/0.3.0-golden-landing-zone.md`. |
@@ -476,6 +547,12 @@ earlier shape this feature's own later work changed) — the fix's own failure m
 manual alternative. Confirm
 on the first project you upgrade that Spec Kit writes its OpenCode commands to `.opencode/commands/`
 (or `.opencode/command/`) and that `ekit models show` lists them without "(no file under .opencode/)".
+
+0.5.0's change lane (`ekit change …`, the CR checks, ledger rebase after `retire`) is covered by unit and CLI
+tests (`tests/test_ekit_050_change.py`) and has not yet run against a live Spec Kit + OpenCode install.
+Confirm on the first project that Spec Kit registers `/speckit.esdlc.change` (`ekit sync` after upgrading)
+and that a small model passes `--text` intact; if quoting breaks, the command tells it to paste the request
+into `request.md` instead.
 
 0.3.0's golden application (FastAPI, Jinja, pytest-bdd) passes its own `ruff check` and
 `ruff format --check`. The kit's tests verify statically that it parses, that every step is bound,

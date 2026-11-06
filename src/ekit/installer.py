@@ -431,6 +431,7 @@ Next, in a terminal in {project.root}:
   git add -A && git commit -m "chore: golden landing zone"
 Then inside `opencode`:
   1. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions
+     (or /speckit.esdlc.change <request>  a bug fix / change typed in chat -> CR-NNNN)
   2. /speckit.esdlc.questions       resolve blocking questions (or `ekit questions export`)
   3. /speckit.specify FEAT-01 -> /speckit.esdlc.gherkin -> /speckit.plan -> /speckit.tasks
      -> /speckit.esdlc.red -> /speckit.implement
@@ -444,6 +445,7 @@ Next, inside `opencode` in {project.root}:
   1. /speckit.constitution          ratify the enterprise constitution for this project
   2. /speckit.esdlc.baseline        build (greenfield) or assess (brownfield) the landing zone
   3. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions
+     (or /speckit.esdlc.change <request>  a bug fix / change typed in chat -> CR-NNNN)
   4. /speckit.esdlc.questions       resolve blocking questions (or `ekit questions export`)
   5. /speckit.specify FEAT-01 -> /speckit.esdlc.gherkin -> /speckit.plan -> /speckit.tasks
      -> /speckit.esdlc.red -> /speckit.implement

@@ -23,6 +23,21 @@ Run `ekit feature current --for red "$ARGUMENTS"` and use exactly the folder nam
 If it exits with an error, show the user its message (it lists the real features) and stop;
 do not choose a feature yourself.
 
+## Change requests (0.5.0)
+
+Run `ekit change show --feature <feature>`. If it prints `none`, ignore this section.
+- **bug**: you reproduce the bug against the code as committed. Write **tests only**: no stubs, no
+  `not_implemented()`, no change under the production source, not even a partial fix. Each scenario
+  must fail on an assertion that shows the *observed* (wrong) behaviour from `change.yaml`, through
+  the existing routes or pages. Step 3 below does not apply. `RED-BUG-REPRODUCED` fails the gate on a
+  501, a `NotImplementedError` or any uncommitted change to production source. If a scenario passes,
+  either the bug is not where the change request says, or the scenario does not exercise it: say so to
+  the user, do not weaken or bend the scenario.
+- **enhancement**: as below, but new routes are stubbed in the package(s) `ekit feature package <feature>`
+  prints (the affected feature's own package in golden projects), registered next to its existing ones.
+  Do not touch existing behaviour; existing scenarios must stay green.
+- **feature**: exactly as below.
+
 ## Steps
 
 1. `ekit context` for the stack's `bdd.binding`, test layout and `agent_rules`.

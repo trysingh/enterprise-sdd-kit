@@ -24,6 +24,7 @@ commands:
   # standard: volume work checked by gates
   speckit.specify: standard
   speckit.clarify: standard
+  speckit.esdlc.change: standard      # 0.5.0: one change request; small, gated by intake/ready
   speckit.esdlc.questions: standard
   speckit.esdlc.gherkin: standard
   speckit.tasks: standard

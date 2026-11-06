@@ -40,6 +40,7 @@ ALWAYS_BASH = [
     "ekit baseline unfreeze*",   # 0.3.0: the golden core is changed by a person, not the agent
     "ekit baseline accept*",
     "ekit baseline install*",
+    "ekit change retire*",       # 0.5.0: retiring a delivered scenario is a person's decision
 ]
 
 
@@ -176,7 +177,7 @@ def freeze_from_ledger(root: Path, feature: str) -> list[str]:
     ledger = root / ".ekit" / "ledger" / f"{feature}.yaml"
     if not ledger.is_file():
         raise EkitError(f"No ledger for {feature}: run `ekit gate red` first.")
-    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red" and e.get("fingerprints")]
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") in ("red", "rebase") and e.get("fingerprints")]
     if not reds:
         raise EkitError(f"The red entry for {feature} has no fingerprints (older ekit): re-run `ekit gate red` while the code is still red.")
     return freeze_feature(root, feature, reds[-1]["fingerprints"])
