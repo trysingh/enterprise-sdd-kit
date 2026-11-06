@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from . import logbook
 from .project import EkitError, dump_yaml, git, load_yaml
 
 OPENCODE_JSON = "opencode.json"
@@ -161,10 +162,13 @@ def sync_permissions(root: Path) -> list[str]:
 
 
 def freeze_feature(root: Path, feature: str, fingerprints: dict[str, str]) -> list[str]:
+    from . import contract
     state = load_state(root)
-    state["frozen"][feature] = patterns_for(feature, fingerprints)
+    # 0.4.0 split mode: bound pytest-bdd modules stay editable (glue); their contract is gate-checked
+    state["frozen"][feature] = patterns_for(feature, contract.frozen_subset(root, feature, fingerprints))
     state["narrow"].pop(feature, None)   # re-frozen: the narrow source-edit protection is no longer needed
     dump_yaml(state, state_path(root))
+    logbook.append(root, {"kind": "state.freeze", "feature": feature, "paths": state["frozen"][feature], "reason": "", "via": logbook.via(), "actor": logbook.actor(root)})
     return sync_permissions(root)
 
 
@@ -204,6 +208,7 @@ def unfreeze_feature(root: Path, feature: str, reason: str, *, narrow_src: list[
         "narrowed_source": state["narrow"].get(feature) or [],
     })
     dump_yaml(state, state_path(root))
+    logbook.append(root, {"kind": "state.unfreeze", "feature": feature, "paths": paths, "reason": reason.strip(), "via": logbook.via(), "actor": logbook.actor(root)})
     return sync_permissions(root)
 
 
@@ -230,6 +235,7 @@ def unfreeze_baseline(root: Path, reason: str) -> list[str]:
     })
     state["baseline"] = []
     dump_yaml(state, state_path(root))
+    logbook.append(root, {"kind": "state.unfreeze-baseline", "feature": None, "paths": state["history"][-1]["paths"], "reason": reason.strip(), "via": logbook.via(), "actor": logbook.actor(root)})
     return sync_permissions(root)
 
 

@@ -53,6 +53,7 @@ commands:
   lint:       ["uv", "run", "--locked", "ruff", "check", "."]
   format:     ["uv", "run", "--locked", "ruff", "format", "--check", "."]
   typecheck:  ["uv", "run", "--locked", "mypy", "src"]
+  typecheck_glue:  ["uv", "run", "--locked", "mypy", "--follow-imports=silent", "--show-error-codes", "--no-error-summary"]
   unit:       ["uv", "run", "--locked", "pytest", "tests/unit", "-q"]
   acceptance: ["uv", "run", "--locked", "pytest", "tests/acceptance", "-q", "--cucumberjson=reports/cucumber-backend.json"]
   coverage:   ["uv", "run", "--locked", "pytest", "tests", "-q", "--cov=src/app", "--cov-fail-under=80"]

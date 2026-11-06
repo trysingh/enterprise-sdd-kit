@@ -33,6 +33,7 @@ class GateContext:
     verbose: bool = False
     outputs: dict[str, str] = field(default_factory=dict)  # captured command output per check
     pending_records: list[dict[str, Any]] = field(default_factory=list)  # queued by bdd.run; see flush_pending_records
+    glue_amendments: list[dict[str, Any]] = field(default_factory=list)  # 0.4.0: queued by bdd.replay_red, written on a pass
 
     def path(self, p: str) -> Path:
         q = Path(p)
@@ -648,6 +649,11 @@ def tests_unchanged(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     fp = reds[-1].get("fingerprints")
     if not fp:
         return [Finding("warn", "the red entry has no file fingerprints (recorded by an older ekit): re-run `ekit gate red` while the code is still red to freeze the tests")]
+    from . import contract
+    if contract.freeze_mode(ctx.project.root) == "split":
+        # 0.4.0: the glue of bound pytest-bdd modules may change; GREEN-CONTRACT-INTACT,
+        # GREEN-GLUE-NOT-WEAKENED and GREEN-GLUE-STILL-RED judge it instead of a byte comparison.
+        fp = {rel: sha for rel, sha in fp.items() if not contract.is_glue(rel, ctx.feature_dir.name)}
     out: list[Finding] = []
     for rel, sha in sorted(fp.items()):
         f = ctx.project.root / rel
@@ -657,7 +663,7 @@ def tests_unchanged(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             out.append(Finding("error", f"{rel}: changed since red was recorded. Red tests are frozen: restore the file from the commit that added {ctx.project.rel(ledger)}, or `ekit unfreeze {ctx.feature_dir.name} --reason ...` and go back to red. A reviewed exception needs an override for this check id"))
     for f in _frozen_files(ctx, w["dir"]):
         rel = _rel_posix(ctx, f)
-        if rel not in fp:
+        if rel not in fp and not (contract.freeze_mode(ctx.project.root) == "split" and contract.is_glue(rel, ctx.feature_dir.name)):
             out.append(Finding("warn", f"{rel}: bound to this feature but added after red was recorded"))
     return out
 
@@ -725,10 +731,17 @@ def bdd_run(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
         # so RED-RUN itself saw nothing wrong — get recorded as a real red entry (and re-frozen)
         # even though the gate's overall result was FAILED. `run_gate` calls flush_pending_records
         # once the whole gate's result is known, and only on a pass.
-        fingerprints = {_rel_posix(ctx, f): _sha(f) for f in _frozen_files(ctx, w["dir"])}
-        ctx.pending_records.append({
-            "expect": expect, "want": want, "status": status, "fingerprints": fingerprints,
-        })
+        frozen = _frozen_files(ctx, w["dir"])
+        fingerprints = {_rel_posix(ctx, f): _sha(f) for f in frozen}
+        rec: dict[str, Any] = {"expect": expect, "want": want, "status": status, "fingerprints": fingerprints}
+        if expect == "red":
+            # 0.4.0: what of the bound modules is frozen in split mode (bindings, Then assertions)
+            from . import contract
+            rec["contract"] = contract.project_contract(
+                ctx.project.root, ctx.feature_dir.name,
+                {_rel_posix(ctx, f): f.read_text(encoding="utf-8", errors="replace") for f in frozen if f.suffix == ".py"},
+                _known_test_files(ctx))
+        ctx.pending_records.append(rec)
     return out
 
 
@@ -757,20 +770,183 @@ def flush_pending_records(ctx: GateContext, results: list[Any]) -> None:
             "scenarios": {sid: status[sid] for sid in want},
             # sha256 of the feature files and bound test modules at this moment; `ledger.tests_unchanged` compares
             "fingerprints": fingerprints,
+            **({"contract": rec["contract"]} if rec.get("contract") else {}),
+            **({"glue_amendments": _write_glue_evidence(ctx)} if expect == "green" and ctx.glue_amendments else {}),
         })
         dump_yaml(data, ledger)
         if cr is not None:
             cr.findings.append(Finding("info", f"recorded {expect} for {len(want)} scenario(s) in {ctx.project.rel(ledger)}"))
         if expect == "red":
-            from . import freeze
+            from . import contract, freeze
             try:
                 rules = freeze.freeze_feature(ctx.project.root, ctx.feature_dir.name, fingerprints)
+                n_frozen = len(contract.frozen_subset(ctx.project.root, ctx.feature_dir.name, fingerprints))
                 if cr is not None:
-                    cr.findings.append(Finding("info", f"froze {len(fingerprints)} file(s) against agent edits in opencode.json ({len(rules)} deny rules); "
+                    if n_frozen < len(fingerprints):
+                        cr.findings.append(Finding("info", f"freeze.mode split: {len(fingerprints) - n_frozen} bound test module(s) stay editable "
+                                                   "for step-body fixes; their bindings and Then assertions are recorded as the contract"))
+                    cr.findings.append(Finding("info", f"froze {n_frozen} file(s) against agent edits in opencode.json ({len(rules)} deny rules); "
                                                f"restart OpenCode to apply; lift with `ekit unfreeze {ctx.feature_dir.name} --reason \"...\"`"))
             except EkitError as exc:
                 if cr is not None:
                     cr.findings.append(Finding("warn", f"could not freeze the red tests in opencode.json: {exc}"))
+
+
+def _known_test_files(ctx: GateContext) -> list[str]:
+    """Every acceptance test file, plus each conftest.py between an acceptance dir and its profile
+    root, at this moment. Recorded at red so GREEN-NO-SHADOW-GLUE can spot glue added later."""
+    out: set[str] = set()
+    for prof in ctx.project.profiles:
+        if not prof.runs_bdd:
+            continue
+        out.update(_rel_posix(ctx, f) for f in _test_files(prof))
+        for d in _bdd_dirs(prof):
+            cur = d
+            while True:
+                if (cur / "conftest.py").is_file():
+                    out.add(_rel_posix(ctx, cur / "conftest.py"))
+                if cur == prof.root or prof.root not in cur.parents:
+                    break
+                cur = cur.parent
+    return sorted(out)
+
+
+def _write_glue_evidence(ctx: GateContext) -> list[dict[str, Any]]:
+    """Called on a passing green only: write the queued glue diffs and return their ledger records."""
+    from . import contract
+    out = []
+    for a in ctx.glue_amendments:
+        rec = {k: v for k, v in a.items() if k not in ("before", "after")}
+        rec["diff"] = contract.write_glue_diff(ctx.project.root, ctx.feature_dir.name, a["file"], a["before"], a["after"])
+        out.append(rec)
+    return out
+
+
+def _last_red(ctx: GateContext) -> dict[str, Any] | None:
+    ledger = _ledger_path(ctx)
+    if not ledger.is_file():
+        return None
+    reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") == "red"]
+    return reds[-1] if reds else None
+
+
+def _split(ctx: GateContext) -> bool:
+    from . import contract
+    return contract.freeze_mode(ctx.project.root) == "split"
+
+
+def _current_glue(ctx: GateContext, d: str, red: dict[str, Any]) -> dict[str, str]:
+    """Current text of the glue modules the red contract covers, plus any newly bound Python module."""
+    from . import contract
+    rels = set((red.get("contract") or {}).get("modules") or {})
+    rels |= {_rel_posix(ctx, f) for f in _feature_bound_tests(ctx, d) if f.suffix == ".py"}
+    out = {}
+    for rel in sorted(rels):
+        f = ctx.project.root / rel
+        if f.is_file() and contract.is_glue(rel, ctx.feature_dir.name):
+            out[rel] = f.read_text(encoding="utf-8", errors="replace")
+    return out
+
+
+@check("ledger.contract_intact")
+def contract_intact(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """0.4.0 split freeze: the step bindings of each bound module are unchanged since red."""
+    if not _split(ctx):
+        return []
+    red = _last_red(ctx)
+    if not red:
+        return []  # ledger.red_first reports it
+    if not red.get("contract"):
+        return [Finding("warn", "the red entry has no contract (recorded before ekit 0.4.0): run "
+                                f"`ekit freeze {ctx.feature_dir.name} --recontract` so split freeze can check the glue")]
+    from . import contract
+    return [Finding("error", m) for m in contract.compare_contract(red["contract"], _current_glue(ctx, w["dir"], red))]
+
+
+@check("bdd.glue_not_weakened")
+def glue_not_weakened(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """0.4.0 split freeze: no Then step lost assertions or changed expected values; no skips or
+    always-true asserts were added."""
+    if not _split(ctx):
+        return []
+    red = _last_red(ctx)
+    if not red or not red.get("contract"):
+        return []
+    from . import contract
+    return [Finding("error", m) for m in contract.compare_weakening(red["contract"], _current_glue(ctx, w["dir"], red))]
+
+
+@check("bdd.no_shadow_glue")
+def no_shadow_glue(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """0.4.0 split freeze: no new conftest.py, and no new step-defining module imported by a bound
+    module, appeared after red. Either could redefine a step outside the recorded contract."""
+    if not _split(ctx):
+        return []
+    red = _last_red(ctx)
+    known = set(((red or {}).get("contract") or {}).get("known_test_files") or [])
+    if not known:
+        return []
+    from . import contract
+    out: list[Finding] = []
+    now = _known_test_files(ctx)
+    for rel in now:
+        if rel not in known and rel.endswith("conftest.py"):
+            out.append(Finding("error", f"{rel}: new conftest.py since red. Step definitions and fixtures it adds would apply "
+                                        "to the frozen scenarios outside their recorded contract; put glue in the feature's own test module"))
+    glue = _current_glue(ctx, w["dir"], red or {})
+    new_files = {r for r in now if r not in known and r.endswith(".py")}
+    for rel, text in glue.items():
+        try:
+            mods = contract.module_contract(text)["imports"]
+        except SyntaxError:
+            continue
+        for nf in sorted(new_files):
+            stem = Path(nf).with_suffix("").as_posix().replace("/", ".")
+            if any(stem.endswith(m) or m.endswith(Path(nf).stem) for m in mods):
+                f = ctx.project.root / nf
+                if f.is_file() and contract.defines_steps(f.read_text(encoding="utf-8", errors="replace")):
+                    out.append(Finding("error", f"{rel} imports {nf}, a module added after red that defines steps. "
+                                                "Keep step definitions in the bound module itself, where the contract covers them"))
+    return out
+
+
+@check("bdd.replay_red")
+def replay_red(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """0.4.0 split freeze: if the glue changed since red, the amended tests must still FAIL cleanly
+    against the feature's code as committed at red. Proves the change did not make the tests pass
+    regardless of the implementation, the same evidence red gave in the first place."""
+    if not _split(ctx):
+        return []
+    red = _last_red(ctx)
+    if not red or not red.get("fingerprints"):
+        return []
+    from . import contract
+    fp = red["fingerprints"]
+    glue = _current_glue(ctx, w["dir"], red)
+    changed = {rel: text for rel, text in glue.items()
+               if fp.get(rel) != _sha(ctx.project.root / rel)}
+    if not changed:
+        return []
+
+    def run() -> list[Finding]:
+        sub = GateContext(project=ctx.project, feature_dir=ctx.feature_dir)
+        return bdd_run(sub, {"expect": "red", "dir": w["dir"]}) + clean_failure(sub, {"dir": w["dir"]})
+
+    rev, found = contract.replay_red(ctx.project, ctx.feature_dir.name, red, run)
+    errors = [f for f in found if f.level == "error"]
+    if errors:
+        return [Finding("error", f"with the amended glue ({', '.join(sorted(changed))}) against the feature's code at red "
+                                 f"({rev[:12]}): {f.message}. The glue change must keep every scenario failing "
+                                 "cleanly before implementation; otherwise it no longer tests the behaviour") for f in errors]
+    for rel, after in sorted(changed.items()):
+        blob = contract.file_at(ctx.project.root, rev, rel)
+        ctx.glue_amendments.append({
+            "file": rel, "red_sha256": fp.get(rel), "green_sha256": _sha(ctx.project.root / rel),
+            "replayed_against": rev, "replay_red": "passed",
+            "before": blob.decode("utf-8", errors="replace") if blob is not None else "", "after": after,
+        })
+    return [Finding("info", f"glue changed since red in {', '.join(sorted(changed))}; re-proved red against {rev[:12]} "
+                            "(every scenario still fails cleanly); the diff is recorded with this green")]
 
 
 _CLEAN_RED_DEFAULT = ("AssertionError",)
@@ -1073,3 +1249,6 @@ def no_exemplar(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             out.append(Finding("error", f"{_rel_posix(ctx, f)} refers to the reference slice ({', '.join(hits)}): "
                                         "copy its shape, never import it, bind its feature file or reuse its ids"))
     return out
+
+
+from . import redchecks  # noqa: E402,F401

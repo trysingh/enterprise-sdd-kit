@@ -17,7 +17,7 @@ apiVersion: ekit.policy/v1
 kind: GatePolicy
 metadata:
   name: enterprise-generic
-  version: 0.3.0
+  version: 0.4.0
 
 spec:
   defaults:
@@ -166,6 +166,9 @@ spec:
         - id: RED-STATE-TYPED
           type: bdd.typed_state        # 0.3.0 (golden): scenario state on ScenarioContext, never a shared dict
           with: { dir: "{feature_dir}/features" }
+        - id: RED-GLUE-TYPED
+          type: bdd.glue_typecheck     # 0.4.0: type-check the bound test module; steps after the first failure never run in red
+          with: { dir: "{feature_dir}/features" }
         - id: RED-NO-EXEMPLAR
           type: golden.no_exemplar     # 0.3.0 (golden): the feature is not, and does not use, the reference slice
           with: { dir: "{feature_dir}/features" }
@@ -174,6 +177,9 @@ spec:
           with: { expect: red, dir: "{feature_dir}/features", record: true }
         - id: RED-CLEAN-FAILURE
           type: bdd.clean_failure      # a scenario must fail on an assertion, not error out of broken test glue
+          with: { dir: "{feature_dir}/features" }
+        - id: RED-ROUTE-STUBBED
+          type: bdd.route_stubbed      # 0.4.0 (golden): a scenario fails with 501 from a stub, never 404
           with: { dir: "{feature_dir}/features" }
 
     # ------------------------------------------------------------------ red recorded (no test run)
@@ -204,6 +210,15 @@ spec:
         - id: GREEN-TESTS-UNCHANGED
           type: ledger.tests_unchanged
           with: { dir: "{feature_dir}/features" }
+        - id: GREEN-CONTRACT-INTACT
+          type: ledger.contract_intact  # 0.4.0 split freeze: step bindings of bound modules unchanged since red
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-GLUE-NOT-WEAKENED
+          type: bdd.glue_not_weakened   # 0.4.0 split freeze: Then assertions kept; no skips / always-true asserts added
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-NO-SHADOW-GLUE
+          type: bdd.no_shadow_glue      # 0.4.0 split freeze: no new conftest.py or step module outside the contract
+          with: { dir: "{feature_dir}/features" }
         - id: GREEN-STEPS-BOUND
           type: bdd.steps_bound        # also catches features recorded red before ekit 0.2.1
           with: { dir: "{feature_dir}/features" }
@@ -212,6 +227,9 @@ spec:
           with: {}
         - id: GREEN-NO-EXEMPLAR
           type: golden.no_exemplar
+          with: { dir: "{feature_dir}/features" }
+        - id: GREEN-GLUE-STILL-RED
+          type: bdd.replay_red          # 0.4.0 split freeze: amended glue still fails cleanly against the red-time code
           with: { dir: "{feature_dir}/features" }
         - id: GREEN-RUN
           type: bdd.run

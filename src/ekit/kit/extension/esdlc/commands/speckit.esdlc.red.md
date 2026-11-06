@@ -60,9 +60,12 @@ do not choose a feature yourself.
 5. Run `ekit gate red`. The gate runs the acceptance suite and requires that **every** scenario
    of this feature appears in the report and **fails**. If one passes, the test is not testing
    the new behaviour — fix the test. If one is missing or undefined, bind it.
-   Failures must be assertion failures or 501/404 responses, not compile errors or crashes in
+   Failures must be assertion failures or 501/404 responses (404 only outside golden projects), not compile errors or crashes in
    the harness itself (the gate checks this too, `RED-CLEAN-FAILURE`: a `KeyError` or similar from
    broken test glue is rejected even though the scenario did technically fail).
+   The gate also type-checks the feature's test module (`RED-GLUE-TYPED`): steps after the first failure never
+   run in red, so every step must call real methods with the right types. In golden projects every scenario must
+   fail with 501 from `not_implemented()`, never 404 (`RED-ROUTE-STUBBED`).
    If you were asked to come back and fix a specific frozen scenario after `ekit unfreeze` (rather
    than writing red for the first time), edit **only** the test file(s) named for that fix in this
    turn — no production code, no unrelated tasks, even ones still open on the task list. Mixing in

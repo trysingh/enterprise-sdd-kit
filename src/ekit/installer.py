@@ -141,7 +141,20 @@ def install_opencode_assets(project: Project) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     for f in sorted(src.glob("*.md")):
         shutil.copy2(f, dest / f.name)
+    install_audit_plugin(project)
     write_agents_md(project)
+
+
+PLUGIN_REL = Path(".opencode") / "plugin" / "ekit-audit.js"
+
+
+def install_audit_plugin(project: Project) -> None:
+    """0.4.0: the OpenCode plugin that logs the agent's tool calls (kit/opencode/plugin/ekit-audit.js)."""
+    src = project.kit.component("opencode") / "plugin" / "ekit-audit.js"
+    if src.is_file():                       # kits older than 0.4.0 have none
+        dest = project.root / PLUGIN_REL
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
 
 
 # --------------------------------------------------------------------------- scaffolding
@@ -179,6 +192,8 @@ def scaffold(project: Project) -> None:
     gi = project.root / ".gitignore"
     existing = gi.read_text(encoding="utf-8").splitlines() if gi.is_file() else []
     wanted = list(GITIGNORE_LINES)
+    if not ((project.config or {}).get("log") or {}).get("commit"):   # `log: {commit: true}` keeps the action log in git
+        wanted.append(".ekit/logs/")
     for prof in project.profiles:  # ENV-01: environment folders (.venv/, node_modules/, target/ …)
         for line in (prof.data.get("environment") or {}).get("gitignore", []) or []:
             if line not in wanted:
@@ -481,6 +496,14 @@ def doctor(project: Project | None) -> int:
         row(bool(glock), "golden landing zone", f"{glock.get('stack')} {glock.get('version')}" if glock else f"missing {golden.LOCK}")
         row(not found, "golden core intact", "matches .ekit/golden.lock.yaml" if not found
             else f"{len(found)} file(s): {', '.join(d.rel for d in found[:4])} (`ekit baseline drift`)")
+    from . import logbook
+    problems_found = logbook.verify(project.root)
+    n_events = logbook.count(project.root)
+    row(not problems_found, "action log (.ekit/logs)",
+        (f"intact ({n_events} events)" if n_events else "no events yet") if not problems_found
+        else f"{len(problems_found)} problem(s): {problems_found[0]} (`ekit log verify`)")
+    plugin = project.root / PLUGIN_REL
+    row(plugin.is_file(), "OpenCode audit plugin", PLUGIN_REL.as_posix() if plugin.is_file() else "missing: run `ekit sync`")
     say("\nWaves and model routing (optional)")
     from . import models, waves
     mode = waves.project_mode(project.root)

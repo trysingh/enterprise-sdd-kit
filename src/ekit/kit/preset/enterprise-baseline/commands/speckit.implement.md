@@ -14,9 +14,19 @@ strategy: wrap
    If it fails only because the red evidence is not committed (`REDREC-COMMITTED`), STOP and ask the user to
    commit the feature files, tests and ledger first; do not commit or edit them yourself.
 2. Run `ekit context` and follow the profile `agent_rules` and `controls` while coding.
-3. Do not edit `.feature` files or the acceptance tests recorded at red, and do not weaken assertions to get green.
-   `ekit gate green` fails on any change (`GREEN-TESTS-UNCHANGED`). If a scenario or test is wrong,
-   stop and say so; the fix goes through the spec (and possibly an open question).
+3. Never edit `.feature` files, and never weaken assertions to get green.
+   Split freeze (the default in golden projects: the feature's test module is not refused to your edit tool):
+   when a step function itself is wrong, such as a method that does not exist, the wrong object, or the wrong
+   return value, you MAY fix that step's BODY in the feature's own test module. Do not change step decorators,
+   patterns, `target_fixture`, `scenarios()` calls or the assertions and expected values of `Then` steps; do not
+   add skips, a new `conftest.py` or a new step module. `ekit gate green` checks this (`GREEN-CONTRACT-INTACT`,
+   `GREEN-GLUE-NOT-WEAKENED`, `GREEN-NO-SHADOW-GLUE`) and re-runs the amended tests against the code as it was at
+   red, where every scenario must still fail (`GREEN-GLUE-STILL-RED`). The diff is recorded for review.
+   Strict freeze (the test module is refused to your edit tool): do not edit it; `GREEN-TESTS-UNCHANGED` fails on
+   any change.
+   If a scenario, a binding or an expected value is wrong, run
+   `ekit blocked <feature> --reason "..." [--file PATH] [--scenario SCN-ID]` and stop: the fix goes through the
+   spec (and possibly an open question), decided by a person.
 4. Extend the landing zone, never rewrite it: do not delete or replace behaviour in baseline modules
    (`app/core`, health, app wiring) or their tests. Add new modules and wire them in.
    Golden landing zone: all code for this feature goes in its package (`ekit feature package <feature>`),

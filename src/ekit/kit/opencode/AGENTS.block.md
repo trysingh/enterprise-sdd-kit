@@ -23,8 +23,11 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 
 - Never invent business facts. Unknowns go to `docs/requirements/<slug>/open-questions.yaml`.
 - No production behaviour before `ekit gate red` has recorded failing tests for it.
-- Never edit `.feature` files or weaken assertions to make a test pass. After `ekit gate red` the feature files and bound
-  acceptance tests are frozen; `ekit gate green` fails if they change. A wrong test is reported, not edited.
+- Never edit `.feature` files or weaken assertions to make a test pass. After `ekit gate red` the feature files are
+  frozen. The bound acceptance test module is frozen too under strict freeze; under split freeze (golden projects) you
+  may fix step BODIES only (wrong method, object or return value), never decorators, patterns, `Then` assertions or
+  expected values, and `ekit gate green` re-proves the amended tests red against the red-time code. A wrong
+  scenario, binding or expected value is reported with `ekit blocked`, not edited.
 - If an edit is refused by a permission rule, stop and report which file and why you needed it. Never route around it
   with shell redirection, `sed`, or scripts.
 - Extend the landing zone, never rewrite it: do not delete or replace existing behaviour in baseline modules.
@@ -45,6 +48,9 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
   shell tool.)
   While a feature is unfrozen, its production source directories are usually also denied to your edit tool until
   it's re-frozen — that's by design (see the previous bullet), not a bug to work around.
+- If a frozen test or scenario cannot be satisfied and is not yours to change, stop and run
+  `ekit blocked <feature> --reason "..." [--file PATH] [--scenario SCN-ID]`, then tell the user. Do not work around it.
+  Your tool calls and `ekit` runs are logged (`ekit log tail`); that log is read by reviewers.
 - Waves (if `ekit wave status --brief` says `on`): work only on acceptance criteria of the current wave
   (`ekit wave scope FEAT-xx`). An NFR may be `Deferred (Wn)` in a conformance table only if the approved plan defers it.
 - If a command starts with an **ekit model routing** note, begin your first reply with the line it gives.

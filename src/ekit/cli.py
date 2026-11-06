@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import subprocess
 import sys
+import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from . import __version__, gates, installer, kitsource
+from . import __version__, gates, installer, kitsource, logbook
 from . import questions as oq
-from .project import EkitError, Kit, Project, bundled_kit_dir, find_project_root, python_exe
+from .project import (FEATURE_DIR_RE, EkitError, Kit, Project, bundled_kit_dir, find_project_root, git,
+                      load_yaml, dump_yaml, python_exe)
 from .runner import run_profile_command
 
 
@@ -47,6 +52,18 @@ def cmd_freeze(args: argparse.Namespace) -> int:
     from . import freeze
     project = Project.load()
     feature = project.resolve_feature(args.feature).name
+    if getattr(args, "recontract", False):
+        from . import contract
+        from .project import dump_yaml, load_yaml
+        ledger = project.root / ".ekit" / "ledger" / f"{feature}.yaml"
+        data = (load_yaml(ledger) or {}) if ledger.is_file() else {}
+        reds = [e for e in (data.get("entries") or []) if e.get("phase") == "red"]
+        if not reds:
+            raise EkitError(f"No red entry for {feature}: run `ekit gate red` first.")
+        reds[-1]["contract"] = contract.contract_from_commit(project.root, feature, reds[-1])
+        dump_yaml(data, ledger)
+        print(f"{feature}: contract recorded from the red-time commit ({len(reds[-1]['contract']['modules'])} module(s)). "
+              "Commit .ekit/ledger.")
     rules = freeze.freeze_from_ledger(project.root, feature)
     print(f"{feature} frozen: {len(rules)} deny rule(s) in opencode.json. Restart OpenCode to apply.")
     return 0
@@ -118,6 +135,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
     overall = 0
     for gid in ids:
         res, notes = gates.run_gate(project, gid, feature=args.feature, prd=args.prd)
+        logbook.note_gate(res)
         out = Path(args.out) if args.out else None
         if out and len(ids) > 1:
             out = out.with_name(f"{out.stem}-{gid}{out.suffix}")
@@ -268,11 +286,113 @@ def cmd_status(args: argparse.Namespace) -> int:
             except EkitError:
                 cells.append("--")
         ledger = project.root / ".ekit" / "ledger" / f"{f.name}.yaml"
-        phases = {e.get("phase") for e in ((yaml.safe_load(ledger.read_text(encoding="utf-8")) or {}).get("entries") or [])} if ledger.is_file() else set()
+        entries = ((yaml.safe_load(ledger.read_text(encoding="utf-8")) or {}).get("entries") or []) if ledger.is_file() else []
+        phases = {e.get("phase") for e in entries}
         cells += ["ok" if "red" in phases else "--", "ok" if "green" in phases else "--"]
         print(f"  {f.name:<28} " + "    ".join(f"{c:<2}" for c in cells) + f"    {'yes' if f.name in frozen else '--'}")
+        open_blocked = _open_blocked(entries)
+        if open_blocked:
+            print(f"    blocked: {open_blocked} open (agent stopped; see `ekit log why {f.name}`)")
     if not features:
         print("  (none yet)")
+    return 0
+
+
+def _open_blocked(entries: list[dict]) -> int:
+    """`phase: blocked` entries recorded after the feature's last red or green entry."""
+    last = max((i for i, e in enumerate(entries) if e.get("phase") in ("red", "green")), default=-1)
+    return sum(1 for e in entries[last + 1:] if e.get("phase") == "blocked")
+
+
+def cmd_blocked(args: argparse.Namespace) -> int:
+    """The agent's way to stop and say why (allowed to it, unlike unfreeze): a ledger entry plus a log event."""
+    from . import freeze
+    project = Project.load()
+    root = project.root
+    feature = project.resolve_feature(args.feature).name
+    reason = (args.reason or "").strip()
+    if not reason:
+        raise EkitError('A reason is required: ekit blocked <feature> --reason "..."')
+    fields = {
+        "reason": reason, "file": args.file, "scenario": args.scenario,
+        "git_head": git(root, "rev-parse", "HEAD"), "by": freeze._who(root), "via": logbook.via(),
+    }
+    ledger = root / ".ekit" / "ledger" / f"{feature}.yaml"
+    data = (load_yaml(ledger) if ledger.is_file() else None) or {"feature": feature, "entries": []}
+    data.setdefault("entries", []).append({
+        "phase": "blocked", "at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(), **fields})
+    dump_yaml(data, ledger)
+    logbook.append(root, {"kind": "agent.blocked", "feature": feature, **fields})
+    print(f"{feature}: blocked recorded in {project.rel(ledger)}. Stop here and tell the user why.\n"
+          "A person should review it. If the .feature file itself is wrong, a person runs "
+          f"`ekit unfreeze {feature} --reason \"...\"`. If the step glue is wrong and the project uses "
+          "`freeze.mode: split`, the agent may fix step bodies in the feature's own test module and the green gate "
+          "re-proves them.")
+    return 0
+
+
+def cmd_log(args: argparse.Namespace) -> int:
+    root = find_project_root()
+    a = args.action
+    events = logbook.iter_events(root)
+    if a == "verify":
+        problems = logbook.verify(root)
+        if problems:
+            print("\n".join(problems))
+            return 1
+        print(f"log intact ({logbook.count(root)} events)")
+        return 0
+    if a == "append":
+        raw = args.json if args.json is not None else sys.stdin.read()
+        try:
+            ev = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise EkitError(f"log append needs a JSON object: {exc}") from None
+        if not isinstance(ev, dict):
+            raise EkitError("log append needs a JSON object.")
+        if not str(ev.get("kind", "")).startswith(("tool.", "agent.")):
+            raise EkitError("log append accepts only kinds starting with `tool.` or `agent.` (ekit writes the others itself).")
+        ev.setdefault("via", "agent")
+        logbook.append(root, ev)
+        return 0
+    if a == "show":
+        if not args.target:
+            raise EkitError("ekit log show RUN_ID")
+        found = [e for e in events if e.get("run_id") == args.target]
+        if not found:
+            raise EkitError(f"No events for run {args.target}.")
+        print("\n".join(logbook.line(e) for e in found))
+        return 0
+    if a == "why":
+        if not args.target:
+            raise EkitError("ekit log why FEATURE")
+        feature = args.target
+        if feature.isdigit() and len(feature) == 3:
+            names = [d.name for d in Project.load(root).feature_dirs() if d.name.startswith(feature + "-")]
+            feature = names[0] if len(names) == 1 else feature
+        shown = [e for e in events if logbook.touches_feature(e, feature) and (
+            (e.get("kind") == "cmd.end" and e.get("gate")) or str(e.get("kind")).startswith("state.")
+            or e.get("kind") == "agent.blocked" or (e.get("kind") == "tool.call" and e.get("outcome") not in (None, "ok")))]
+        if not shown:
+            print(f"No logged events for {feature}.")
+        for e in shown:
+            print(f"{e.get('ts')} {e.get('via') or '-':<6} {logbook.summary(e)}")
+        return 0
+    if a == "export":
+        for e in events:
+            if args.since and str(e.get("ts", "")) < args.since:
+                continue
+            if args.feature and not logbook.touches_feature(e, args.feature):
+                continue
+            print(json.dumps(e, ensure_ascii=False, separators=(",", ":")))
+        return 0
+    # tail
+    picked = [e for e in events
+              if (not args.feature or logbook.touches_feature(e, args.feature))
+              and (not args.kind or str(e.get("kind", "")).startswith(args.kind))
+              and (not args.via or e.get("via") == args.via)]
+    for e in picked[-args.n:] if args.n > 0 else []:
+        print(logbook.line(e))
     return 0
 
 
@@ -559,6 +679,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("freeze", help="re-apply the edit protection for a red feature (done automatically by `gate red`)")
     sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
+    sp.add_argument("--recontract", action="store_true",
+                    help="0.4.0: record the split-freeze contract for a feature recorded red by an older ekit "
+                         "(computed from the committed red-time tests)")
     sp.set_defaults(fn=cmd_freeze)
 
     sp = sub.add_parser("unfreeze", help="lift the edit protection of a feature's red tests (needs a reason; audited)")
@@ -658,9 +781,83 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("title", nargs="+")
     sp.set_defaults(fn=cmd_adr)
 
+    sp = sub.add_parser("blocked", help="agent: stop and record why a frozen test or scenario cannot be satisfied")
+    sp.add_argument("feature", nargs="?", help="feature folder, e.g. 001-user-admin (default: the current one)")
+    sp.add_argument("--reason", required=True, help="what is wrong, concretely")
+    sp.add_argument("--file", help="the file the problem is in")
+    sp.add_argument("--scenario", help="scenario id, e.g. SCN-003")
+    sp.set_defaults(fn=cmd_blocked)
+
+    sp = sub.add_parser("log", help="action log: tail | show RUN_ID | why FEATURE | export | verify | append")
+    sp.add_argument("action", choices=["tail", "show", "why", "export", "verify", "append"])
+    sp.add_argument("target", nargs="?", help="show: run id; why: feature")
+    sp.add_argument("-n", type=int, default=50, help="tail: how many events (default 50)")
+    sp.add_argument("--feature", help="tail / export: only this feature")
+    sp.add_argument("--kind", help="tail: kind prefix, e.g. cmd, state, tool.call")
+    sp.add_argument("--via", choices=["agent", "person"], help="tail: who acted")
+    sp.add_argument("--since", help="export: ISO timestamp or date")
+    sp.add_argument("--json", help="append: the event as a JSON object (default: read stdin)")
+    sp.set_defaults(fn=cmd_log)
+
     sp = sub.add_parser("doctor", help="check tools, kit integrity and installation")
     sp.set_defaults(fn=cmd_doctor)
     return p
+
+
+@dataclass
+class _LogRun:
+    """cmd.start / cmd.end events around one command (see logbook)."""
+    root: Path
+    cmd: str
+    args: list[str]
+    feature: str | None
+    run_id: str
+    t0: float
+
+    @classmethod
+    def begin(cls, args: argparse.Namespace, argv: list[str]) -> _LogRun | None:
+        if args.cmd == "log":
+            return None            # reads are not logged; `log append` writes its own event
+        try:
+            root = find_project_root()
+            if not (root / ".ekit").is_dir():
+                return None
+            rest = argv[argv.index(args.cmd) + 1:] if args.cmd in argv else argv
+            feature = next((a for a in rest if not a.startswith("-") and FEATURE_DIR_RE.match(a)), None)
+            run = cls(root, args.cmd, logbook.redact_argv(rest), feature, uuid.uuid4().hex, time.monotonic())
+            logbook.CURRENT.clear()
+            logbook.append(root, {"kind": "cmd.start", **run._fields()})
+            return run
+        except (EkitError, OSError):
+            return None
+
+    def _fields(self) -> dict:
+        return {
+            "run_id": self.run_id, "cmd": self.cmd, "args": self.args, "feature": self.feature,
+            "via": logbook.via(), "actor": logbook.actor(self.root), "session": os.environ.get("EKIT_SESSION"),
+            "ekit": __version__, "git_head": git(self.root, "rev-parse", "--short", "HEAD"),
+            "dirty": bool(git(self.root, "status", "--porcelain", "--", ".", ":(exclude).ekit/logs")),
+        }
+
+    def end(self, rc: int, error: str | None) -> None:
+        gate = logbook.CURRENT.pop("gate", None)
+        fields = self._fields()
+        if gate:
+            fields["feature"] = gate.get("feature") or fields["feature"]
+            fields["gate"] = {k: gate[k] for k in ("name", "result", "checks", "findings")}
+        logbook.append(self.root, {"kind": "cmd.end", **fields, "exit": rc,
+                                   "duration_ms": int((time.monotonic() - self.t0) * 1000), "error": error})
+
+
+def _run(args: argparse.Namespace) -> tuple[int, str | None]:
+    try:
+        return int(args.fn(args) or 0), None
+    except EkitError as exc:
+        print(f"ekit: {exc}", file=sys.stderr)
+        return 2, str(exc)
+    except KeyboardInterrupt:
+        print("\nekit: interrupted", file=sys.stderr)
+        return 130, "interrupted"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -669,15 +866,16 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles default to cp1252
         except (ValueError, OSError):
             pass
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
+    run = _LogRun.begin(args, argv)
+    rc, error = 1, "unexpected error"
     try:
-        return int(args.fn(args) or 0)
-    except EkitError as exc:
-        print(f"ekit: {exc}", file=sys.stderr)
-        return 2
-    except KeyboardInterrupt:
-        print("\nekit: interrupted", file=sys.stderr)
-        return 130
+        rc, error = _run(args)
+        return rc
+    finally:
+        if run is not None:
+            run.end(rc, error)
 
 
 if __name__ == "__main__":
