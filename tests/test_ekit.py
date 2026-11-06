@@ -304,7 +304,7 @@ def test_bundled_kit_declares_the_new_checks_and_matching_requirement():
     pol = Kit.load(KIT).policy()["spec"]["gates"]
     ids = {c["id"] for g in pol for c in g["checks"]}
     assert {"RED-STEPS-ASSERT", "GREEN-TESTS-UNCHANGED"} <= ids
-    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.5.0,<0.6"
+    assert yaml.safe_load((KIT / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.7.0,<0.8"
 
 
 # ------------------------------------------------------------------ 0.1.3: edit protection (freeze)

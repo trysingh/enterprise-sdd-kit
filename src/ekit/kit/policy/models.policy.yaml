@@ -21,11 +21,13 @@ commands:
   speckit.esdlc.baseline: flagship    # landing zone every feature extends
   speckit.plan: flagship              # architecture and NFR conformance
   speckit.esdlc.red: flagship         # the frozen tests green is judged against
+  speckit.esdlc.design: flagship      # 0.7.0: the shape every later test and slice is written in
   # standard: volume work checked by gates
   speckit.specify: standard
   speckit.clarify: standard
   speckit.esdlc.change: standard      # 0.5.0: one change request; small, gated by intake/ready
   speckit.esdlc.questions: standard
+  speckit.esdlc.slice: standard       # 0.7.0: W0 build; gated by smoke
   speckit.esdlc.gherkin: standard
   speckit.tasks: standard
   speckit.implement: standard

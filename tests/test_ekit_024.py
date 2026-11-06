@@ -76,6 +76,8 @@ def _project(tmp_path) -> Path:
 
 def _fake_run(status: str, error_message: str):
     def fake(prof, name, **_):
+        if name != "acceptance":
+            return None     # e.g. RED-LINT's `lint` command: not defined by this fake profile
         report = prof.root / prof.bdd["report"]
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps([{"name": "Demo", "tags": [], "elements": [

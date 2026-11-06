@@ -1,0 +1,21 @@
+# design.yaml: the spine of traceability (ekit 0.7.0). Validated by `ekit gate design` (DESIGN-*).
+# Replace every TODO. Operation names are FastAPI operation_ids (= OpenAPI operationId).
+topology: TODO                      # e.g. central-server
+ports:                              # each: a Protocol + one adapter + one in-memory fake
+  - {name: TODO, methods: [TODO], dependency: TODO}
+seams:                              # all five are required
+  principal:  {impl: dev-users, file: config/dev-users.yaml}
+  audit:      {impl: log}
+  request_id: {impl: middleware}
+  config:     {impl: env}
+  data_owner: {field: owner_id}
+features:                           # requirement -> feature -> what a user can call
+  FEAT-01:
+    key: true                       # default true; false = not needed in the first delivery
+    brs: [BR-001]                   # every BR of the PRD feature
+    operations: [TODO]              # and/or pages
+    pages: []                       # e.g. ["GET /chat/{peer}"]
+slices:
+  - {id: S0, features: [FEAT-01], journeys: [J-01]}
+decisions:
+  - {id: D1, title: Topology, status: proposed, adr: null}   # accepted needs an ADR-NNNN

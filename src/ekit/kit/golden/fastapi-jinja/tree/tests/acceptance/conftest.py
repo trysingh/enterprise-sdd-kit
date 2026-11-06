@@ -15,11 +15,15 @@ needs something another step produced reads it from `ctx` of the SAME scenario.
   Then the response is a problem document with code "<code>"
   Then the page contains "<text>"
   Then the page does not contain "<text>"
+
+Journey steps (sign in as a dev user, call an operation by operation_id, remember / recall values,
+response assertions) live in `tests/acceptance/api_steps.py` and are imported below.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import parse_qsl
 
@@ -28,16 +32,37 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, then, when
 
-from tests.acceptance.support import ScenarioContext
+from tests.acceptance.api_steps import *  # noqa: F403 - journey steps (golden 1.1.0)
+from tests.acceptance.support import ScenarioContext, journeys
+from tests.acceptance.support.paths import REPO_ROOT
 
 PROBLEM_JSON = "application/problem+json"
 
 
 @pytest.fixture(scope="session")
-def app() -> FastAPI:
+def app(db_schema: None) -> FastAPI:
     from app.main import create_app
 
-    return create_app()
+    return journeys.install(create_app())  # test-only call recording for journeys (reports/journeys.json)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _journey_reports(app: FastAPI) -> Iterator[None]:
+    yield
+    journeys.write_reports(app, REPO_ROOT / "reports")
+
+
+@pytest.fixture(autouse=True)
+def _journey_scope(request: pytest.FixtureRequest) -> Iterator[None]:
+    journeys.RECORDER.begin(request.node)
+    yield
+    journeys.RECORDER.end()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[None]:
+    outcome = yield
+    journeys.RECORDER.finish(item, outcome.get_result().outcome)
 
 
 @pytest.fixture

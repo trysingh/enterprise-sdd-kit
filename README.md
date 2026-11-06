@@ -1,4 +1,4 @@
-# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.5.0)
+# Enterprise SDD Kit (`ekit`) — MVP1 (ekit 0.7.2)
 
 One command turns a new or existing repository into an enterprise landing zone for
 **GitHub Spec Kit + OpenCode**, running a deterministic
@@ -26,7 +26,7 @@ This replaces the manual `specify init` / `specify integration install opencode`
 
 | Layer | What it is | Where it ends up |
 |---|---|---|
-| **esdlc extension** | New Spec Kit commands: `/speckit.esdlc.brd`, `.change` (0.5.0), `.questions`, `.baseline`, `.gherkin`, `.red` | `.specify/extensions/esdlc`, `.opencode/commands` |
+| **esdlc extension** | New Spec Kit commands: `/speckit.esdlc.brd`, `.change` (0.5.0), `.questions`, `.design` and `.slice` (0.7.0), `.baseline`, `.gherkin`, `.red` | `.specify/extensions/esdlc`, `.opencode/commands` |
 | **enterprise-baseline preset** | Enterprise constitution; traceability + NFR sections appended to spec/plan/tasks templates; gates wrapped around core `/speckit.specify`, `.plan`, `.tasks`, `.implement` | `.specify/presets/…`, `.opencode/commands` |
 | **NFR catalogue** | 37 generic NFRs (22 platform-scope, 15 feature-scope): security, API, observability, reliability, data, runtime environment, performance, quality, delivery, UX, docs | `.ekit/kit/baseline/nfr-catalog.yaml` |
 | **Stack profiles** | Per stack: toolchain, layout, required paths, argv commands, BDD wiring, how each NFR is met, agent rules | `.ekit/kit/profiles/**` |
@@ -69,6 +69,52 @@ and `--baseline generate` opts out. Brownfield folders and the other stacks alwa
 
 `ekit baseline status` shows the revision, freeze state, drift and seams. Design and the mapping
 from each 0.2.x bug to its structural fix: `docs/design/0.3.0-golden-landing-zone.md`.
+
+## Happy path first (0.7.0)
+
+0.1.x to 0.6.x were found on one small app that never converged: the pipeline fixed no shape before the
+first test was frozen, applied full rigor before anything was stable, and no gate asked whether a user could
+actually use the planned features. 0.7.0 makes the opposite the default for a **new golden project**
+(`ekit init` picks `--lane happy-path`; `--lane classic` keeps the 0.6.4 flow). Design note:
+`docs/design/0.7.0-happy-path-first.md`.
+
+| # | Stage | Command | Gate | Rigor |
+|---|---|---|---|---|
+| 1 | Intake: BRD, PRD, questions **and `happy-path.md`** (key features, cross-feature journeys) | `/speckit.esdlc.brd` | `intake` (`INTAKE-HAPPY-PATH`: every key feature is in a journey) | as today |
+| 2 | **Design**: `docs/design/architecture.md` + `design.yaml` (topology, ports, features -> operations/pages, seams, slices, decisions) | `/speckit.esdlc.design`, then a person: `ekit design approve --by` | `design` (`DESIGN-*`) | person approves |
+| 3 | **W0 happy path**: build slice `S0` against the Day-0 seams; Gherkin **journeys** through the HTTP API | `/speckit.esdlc.slice S0`, `ekit run journeys` | `smoke` | `skeleton` |
+| 4 | **Adoption point** | a person: `ekit wave advance --by` | design approved, `smoke` passes, baseline recorded; W0 journeys fingerprinted | -> `standard` |
+| 5 | W1..n: changes, spec, red, green as in 0.6.4 | `/speckit.esdlc.change`, `/speckit.specify` | all existing gates (`SMOKE-W0-INTACT` keeps the happy path green) | `standard` |
+| 6 | Enterprise overlay waves: real controls replace the dummies | | + `GREEN-NO-DUMMY` | `enterprise` |
+
+- **Rigor is a property of the wave.** `policy/rigor.policy.yaml` says which checks run at `skeleton`,
+  `standard` and `enterprise`; each wave in `.ekit/waves.yaml` names its `rigor:` (W0 `skeleton`, W1+ `standard`).
+  Every gate report names the level and lists the checks it skipped because of it. No wave plan, or a wave
+  without `rigor:`, means nothing changes: gates behave exactly as in 0.6.4. Raising rigor is a person action
+  (`wave advance`).
+- **The design gate.** `DESIGN-FILES`, `-SECTIONS`, `-SCHEMA`, `-PORTS`, `-SEAMS`, `-FEATURES` (every key FEAT has
+  an operation or page and is in exactly one slice), `-BRS-LISTED`, `-DECISIONS`, `-JOURNEYS`, `-APPROVED`.
+  `ekit design init [--from-code]` writes the templates (or drafts `design.yaml` from `Protocol` classes, the PRD
+  and `reports/openapi.json`); `ekit design approve --by` is person-only (denied to the agent's shell).
+- **Day-0 seams in the golden core (`fastapi-jinja` 1.1.0).** `get_principal()` with `DevUserProvider` (fixed users
+  in `config/dev-users.yaml`, HTTP Basic for the API, a minimal `/signin` form and session cookie for pages; refuses
+  unless `APP_ENV` is `dev` or `test`), `AuditSink` + `LogAuditSink`, an `X-Request-Id` middleware, settings from
+  env, and the `owner_id` data-owner convention. A **generic API step library** (`tests/acceptance/api_steps.py`:
+  sign in as a dev user, call by `operation_id` resolved from the app's OpenAPI, remember / recall values, response
+  assertions) means most journeys need no step code. A test-only middleware writes `reports/journeys.json` (and
+  `reports/openapi.json`).
+- **Traceability instead of sign-off.** `smoke` checks `SMOKE-JOURNEYS-PASS`, `-OPERATION-EXISTS`,
+  `-OPERATION-EXERCISED` (a 2xx from a journey), `-PAGE-REACHABLE`, `-FEATURE-COVERED`, `-W0-INTACT`, plus
+  `DESIGN-PORTS-IMPLEMENTED` (AST scan: Protocol with the declared methods, its dependency function, an adapter,
+  a fake) and `BASE-SEAMS-PRESENT`. `ekit trace matrix [--format md|csv|json]` prints **BR -> FEAT ->
+  operation/page -> journey -> last result**; `ekit trace postman` exports a Postman v2.1 collection (OpenAPI +
+  journeys, HTTP Basic dev-user preset) for hand checks. `GREEN-NO-DUMMY` (enterprise rigor only) fails while the
+  dummy principal or audit sink is still declared in `design.yaml` or set for a non-dev environment file.
+
+Known limits: the golden application code is verified statically and with stubbed framework modules in this
+repository, not run (FastAPI and pytest-bdd are not ekit dependencies); journeys prove a feature was *called
+successfully*, not that every assertion is meaningful; UI-only features are covered by reachability only; the
+generic steps and seams exist for the golden core only (other stacks get the design stage, rigor and the matrix).
 
 ## Brownfield: bug fixes and changes from the prompt (0.5.0)
 
@@ -291,7 +337,8 @@ and `ekit doctor` both show it while active.
 
 Since 0.2.0 ekit also owns `permission.bash` deny rules for the commands that record a person's decision:
 `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …`, (0.3.0)
-`ekit baseline unfreeze|accept|install` and (0.5.0) `ekit change retire`. The
+`ekit baseline unfreeze|accept|install`, (0.5.0) `ekit change retire` and (0.6.0) `ekit baseline enforce` and
+`ekit constitution lock`. The
 agent's shell tool cannot run them; it tells the user the command instead. Running them through another
 wrapper (`uv run ekit …`, a script) is not covered, and the records they write name who acted.
 
@@ -426,6 +473,14 @@ ekit change new --type bug|enhancement|feature --title T --text "..." [--affects
 ekit change list | show CR-0007 | show --feature NNN-slug | candidates "<request text>"
 ekit change retire NNN-slug SCN-NNN-nn --by CR-0007 --reason "..."   # a person: retire a superseded scenario
 ekit constitution ratify|check                   # fill placeholders deterministically / check I-VIII
+ekit constitution lock                           # 0.6.0, a person, brownfield: adopt the team's own V-VIII (.ekit/constitution.lock.yaml)
+ekit baseline enforce NFR-ID... --reason "..."    # 0.6.0, a person, brownfield ratchet (.ekit/baseline-enforced.yaml); no un-enforce
+ekit init NAME --lane happy-path|classic          # 0.7.0: greenfield golden defaults to happy-path
+ekit design init [--from-code] | status | approve --by "Name"   # 0.7.0 (approve: a person)
+ekit gate design | smoke                          # 0.7.0
+ekit run journeys                                 # 0.7.0: runs the journeys, writes reports/journeys.json + openapi.json
+ekit trace matrix [--format md|csv|json]          # 0.7.0: BR -> FEAT -> operation/page -> journey -> last result
+ekit trace postman [--out FILE]                   # 0.7.0: Postman v2.1 collection from OpenAPI + journeys
 ```
 
 ## Adding a stack
@@ -447,7 +502,7 @@ src/ekit/kit/             the kit itself (this is what gets vendored into projec
   kit.yaml                manifest: stacks, components, version
   baseline/               NFR catalogue
   profiles/               stack profiles
-  policy/                 gate policy, wave policy, model routing policy
+  policy/                 gate policy, wave policy, rigor policy, model routing policy
   extension/esdlc/        Spec Kit extension (commands + templates)
   preset/enterprise-baseline/  Spec Kit preset (template appends + command wraps)
   opencode/               AGENTS.md block + agents
@@ -471,13 +526,35 @@ docs/design/              design notes per release
 | 0.2.3 | 0.2.3 | Found applying a 0.2.2-flagged fix by hand on the same project (a patch applied outside the agent's edit tool, caught correctly by `GREEN-TESTS-UNCHANGED`, then fixed with a manual unfreeze/revert/red/restore cycle): `ekit fix-red <feature> --reason "..."` automates that cycle — unfreeze, revert the feature's production source to its last-red commit (not `git stash`, which has nothing to grab once that source is already committed), run `ekit gate red`, restore the source either way — without ever committing. Denied to the agent's shell tool, same as `ekit unfreeze`. Requires `ekit >=0.2.3,<0.3`. Design: `docs/design/0.2.3-fix-red.md`. |
 | 0.2.4 | 0.2.4 | Found running `ekit fix-red` on the same project: a run rejected by `RED-CLEAN-FAILURE` (an errored scenario, not a clean assertion failure) still recorded a red ledger entry and re-froze the feature, because `RED-RUN`'s own findings were already clean before `RED-CLEAN-FAILURE`, a later check in the same gate, got to reject the run — poisoning the ledger's "last red" reference for any later `fix-red` / `gate red` on that feature. The ledger write (and re-freeze) is now queued and only flushed once the whole gate has actually passed. `ekit fix-red`'s failure message also now explains the separate, structural limit that a non-assertion failure after a revert usually means the revert (which touches the feature's whole production source directory) reached back further than this fix needs, and suggests reverting just the specific file(s) by hand instead. Requires `ekit >=0.2.4,<0.3`. Design: `docs/design/0.2.4-defer-red-ledger-write.md`. |
 | 0.5.0 | 0.5.0 | **Change requests from the prompt (brownfield).** `/speckit.esdlc.change <request>` takes a bug fix, enhancement or feature as typed: `ekit change new` allocates `CR-NNNN` and keeps the request verbatim in `docs/requirements/cr-NNNN-<slug>/` (`request.md`, `change.yaml`), a small PRD folder every existing gate works on; `--prd CR-0007` resolves everywhere. `ekit change candidates` ranks the existing features a request touches. Same red/green cycle; a bug's red must reproduce it against untouched committed code (`RED-BUG-REPRODUCED`, no 501 stubs). A change that makes a delivered frozen scenario wrong lists it under `supersedes:`; a person retires it with `ekit change retire` (ledger `rebase` entry, re-freeze; agent-denied) and `GREEN-CHANGE-SUPERSEDED` holds green until then. Golden: a bug fix or enhancement works in the affected feature's package (`ekit feature package`, `fix-red`). `/speckit.specify` given free text points to `.change`. Design: `docs/design/0.5.0-change-lane.md`. Requires `ekit >=0.5.0,<0.6`. |
+| 0.5.1 | 0.5.1 | **Brownfield baseline.** New conformance status `Gap` (brownfield only, needs justification and a remediation ticket/task/ADR id; warns). `Waived` stays ADR-only and a person's decision. In a brownfield project (`mode: brownfield`) `BASE-SKELETON` missing paths warn instead of failing. Git warnings name the cause and fix (`dubious ownership`, not a repository, git missing); the missing runtime pin message shows the file format. Design: `docs/design/0.5.1-brownfield-baseline.md`. Requires `ekit >=0.5.1,<0.6`. |
+| 0.6.0 | 0.6.0 | **Forward baseline (brownfield).** In an adopted repository the baseline applies to new code; existing code is accepted as-is. Day one needs only *pipeline readiness*: `layout.pipeline_paths` of each profile are errors if missing (additive files), other skeleton paths are not reported; git unusable is an error. `docs/engineering/baseline-conformance.md` is optional (`/speckit.esdlc.baseline snapshot`); new status `Inherited` (no evidence or ticket; info). Ratchet: `ekit baseline enforce NFR-ID --reason` (a person, one way) makes that NFR require Addressed / N/A / Waived+ADR. `ekit constitution lock` (a person) adopts the team's principles V-VIII; I-IV stay the kit's. Duplicate NFR rows are an error. Report folders are created before profile commands; a UTF-16 / BOM `.python-version` (PowerShell `>`) is reported with the fix. Feature plans in brownfield also cover platform NFRs for code they add or change. Design: `docs/design/0.6.0-forward-baseline.md`. Requires `ekit >=0.6.0,<0.7`. |
+| 0.6.1 | 0.6.1 | Non-golden red guidance; `ekit feature package` no longer errors outside golden; agents stay inside the repository. Requires `ekit >=0.6.0,<0.7`. |
+| 0.6.2 | 0.6.2 | Red gate warns on lint issues before freezing, so they are fixed before green instead of after. Requires `ekit >=0.6.0,<0.7`. |
+| 0.6.3 | 0.6.3 | `GHERKIN-UI-ENTRY` (warn): a `@ui` scenario with no `Background` that acts on a page (sends/selects/submits/...) before it opens/navigates to one is flagged - each scenario runs from a fresh state, so acting without first entering is usually a missed step, not real coverage. Heuristic: a file-wide `Background` is assumed to supply entry steps for every scenario in it; false negatives are expected, false positives should be rare. Requires `ekit >=0.6.0,<0.7`. |
+| 0.6.4 | 0.6.4 | `RED-STEPS-ASSERT` (`bdd.vacuous_steps`, warn) now also flags a `Given` step whose text describes an outage/failure (unavailable, outage, times out, unreachable, cannot be loaded/reached, fails to load/respond/connect/send) but whose body never wires a fault into the app (no `dependency_overrides`, `monkeypatch`, `mock.patch`/`Mock(`/`MagicMock(`/`patch(` found in its source) - a flag set with `ctx.remember(...)` alone has no effect on the request path. Deliberately narrower than business-rule-denial wording ("denied", "forbidden", "rejected", "invalid"), which is usually real and already enforced. A deliberate unwired fault step is allowed with `# ekit: allow-unwired-fault <reason>`. Requires `ekit >=0.6.0,<0.7`. |
+| 0.7.1 | 0.7.1 | **Fixes from the first happy-path test run.** `SMOKE-RUN` fails (exit code and last output lines) when `ekit run journeys` exits non-zero; approving the design places the ACs of the W0 slices in W0 (who/when in `.ekit/waves.yaml`) and proposes the rest for W1; golden `fastapi-jinja` 1.1.1: empty `migrations/versions/0001_initial.py` (one revision per slice) and `db_schema` / `db_session` fixtures on a temp SQLite file; journey steps take typed args (`true`/`false`/numbers/`null`) and `the response does not contain`, `the call fails with status N`, `the list is empty`; optional `package:` per feature in `design.yaml` (`ekit feature package FEAT-nn`); a port may declare `adapter: in-process` (or be bound by its dependency function) so one class satisfies `DESIGN-PORTS-IMPLEMENTED`; `ekit init` ends "Done with warnings" when `uv lock` failed. Design: `docs/design/0.7.1-test-run-fixes.md`. Requires `ekit >=0.7.0,<0.8`. |
+| 0.7.2 | 0.7.2 | **Fixes from the second test run.** Golden `fastapi-jinja` 1.1.2: `the response contains` / `does not contain` resolve `{name}` from remembered values, and an unknown `{name}` / `<name>` is an error instead of a vacuous pass; `ekit init` creates a missing target directory and runs `git init` + an initial commit (never into an existing repo: it prints the commit command); gates in the happy-path lane print an info line, not "wave plan no longer valid", before the design is approved; `DESIGN-DECISIONS` requires the cited ADR to mention the decision id or title, and `ekit adr new "Title" --decision D1` writes that reference. Design: `docs/design/0.7.2-test-run-fixes.md`. Requires `ekit >=0.7.0,<0.8`. |
+| 0.7.0 | 0.7.0 | **Happy path first.** Greenfield golden projects default to the happy-path lane (`--lane classic` keeps 0.6.4): `happy-path.md` at intake (`INTAKE-HAPPY-PATH`), a **design stage** (`architecture.md` + `design.yaml`, gate `design` with `DESIGN-*`, `ekit design init [--from-code]` / `approve --by`), a **W0 slice** proved by Gherkin journeys and gate `smoke` (`SMOKE-JOURNEYS-PASS`, `-OPERATION-EXISTS`, `-OPERATION-EXERCISED`, `-PAGE-REACHABLE`, `-FEATURE-COVERED`, `-W0-INTACT`, `DESIGN-PORTS-IMPLEMENTED`, `BASE-SEAMS-PRESENT`), **rigor by wave** (`policy/rigor.policy.yaml`, `rigor:` per wave; reports name the level and the skipped checks), an adoption point on `wave advance` out of W0 (design approved, smoke green, baseline recorded, journeys fingerprinted), `GREEN-NO-DUMMY` (enterprise rigor), `ekit trace matrix` / `postman`. Golden `fastapi-jinja` 1.1.0: Day-0 seams (dev-user principal, audit sink, request id, data owner) and a generic API step library. New commands `/speckit.esdlc.design`, `/speckit.esdlc.slice`. Design: `docs/design/0.7.0-happy-path-first.md`. Requires `ekit >=0.7.0,<0.8`. |
 | 0.4.1 | 0.4.1 | `GREEN-LINT` failed on Spec Kit's own scripts (`.specify/scripts/python/*.py`, E501) because the fastapi profile ran `ruff check .` over the whole repository. `lint` and `format` now pass `--extend-exclude .specify,.opencode,.ekit`, and the golden pyproject (revision 1.0.1) sets the same `extend-exclude`. Requires `ekit >=0.4.0,<0.5`. |
 | 0.4.0 | 0.4.0 | **Split freeze and action log.** Found on the intranet messenger: step functions after the first failing step never run in red, so logic errors in them (a method that doesn't exist, the wrong object or return value) surfaced only in green, in a frozen module, and needed repeated person unfreezes. Red now type-checks the feature's test module (`RED-GLUE-TYPED`) and, in golden projects, rejects 404 failures where a 501 stub was expected (`RED-ROUTE-STUBBED`). `freeze.mode: split` (default for golden projects, `strict` otherwise; `.ekit/project.yaml`) keeps `.feature` files frozen but lets the agent fix step bodies; green checks the bindings (`GREEN-CONTRACT-INTACT`), `Then` assertions and hazards (`GREEN-GLUE-NOT-WEAKENED`), new conftest or step modules (`GREEN-NO-SHADOW-GLUE`), and re-runs amended tests against the red-time code, which must still fail cleanly (`GREEN-GLUE-STILL-RED`); the diff is recorded under `.ekit/evidence/`. `ekit freeze --recontract` for features recorded red before 0.4.0. `ekit blocked` (allowed to the agent). Append-only, hash-chained action log `.ekit/logs/actions.jsonl` for every `ekit` command and, through the OpenCode plugin `.opencode/plugin/ekit-audit.js`, every agent tool call; `ekit log tail\|show\|why\|export\|verify`. Requires `ekit >=0.4.0,<0.5`. Design: `docs/design/0.4.0-split-freeze-and-action-log.md`. |
 | 0.3.0 | 0.3.0 | **Golden landing zone** for `fastapi-jinja` (revision 1.0.0) plus structural fixes for every 0.2.1–0.2.5 bug class. Typed `ScenarioContext` and a shared step library in a frozen conftest (`RED-STATE-TYPED`); the golden core and test helpers are frozen and fingerprinted (`BASE-`/`GREEN-GOLDEN-INTACT`); one package per feature, which `fix-red` reverts alone; `ekit feature current` replaces the model choosing the active feature, and no command text carries an example name; `RED-`/`GREEN-NO-EXEMPLAR`; `ekit adr new`; deterministic `ekit constitution ratify` and `BASE-CONSTITUTION`; three-way golden upgrades. `ekit init --baseline golden\|generate`. Requires `ekit >=0.3.0,<0.4`. Design: `docs/design/0.3.0-golden-landing-zone.md`. |
 | 0.2.5 | 0.2.5 | Found mid-`/speckit.implement` on the same project: an agent treated the illustrative example in a command's "active feature" step (`001-user-admin`, `001`) as a real feature to fall back to when `$ARGUMENTS` was empty. `speckit.implement.md` and `speckit.esdlc.red.md` now say explicitly that those examples show only the *shape* of a feature name, name them, and say never to fall back to one — always run `ekit status` instead. Wording-only; no CLI change. Requires `ekit >=0.2.5,<0.3`. |
 
 Upgrade: `uv tool install --reinstall ./enterprise-sdd-kit` (or `--force git+…@<tag>`), then in each project
-`ekit upgrade` and commit `.ekit/`. Projects vendored before 0.1.4 have no CLI pin: `ekit doctor` says so until
+`ekit upgrade` and commit `.ekit/`. Upgrading to 0.7.0: existing projects are unchanged (no `rigor:` means
+`standard`; their `lane` is `classic`; `ekit gate all` does not run `design` / `smoke`). A golden project gets
+revision 1.1.0 as a three-way merge (new core files for the seams and journey steps, small edits to `main.py`,
+`settings.py`, `middleware.py`, `conftest.py`; resolve conflicts, then `ekit baseline accept`). To adopt the lane in an
+existing project: set `lane: happy-path` in `.ekit/project.yaml`, give waves a `rigor:` (`ekit wave init --force` writes
+W0/W1), `ekit design init --from-code`, and re-run `ekit sync` so `ekit design approve*` is denied to the agent's shell.
+Upgrading to 0.7.1: no action for classic projects. A happy-path golden project gets golden 1.1.1 as a three-way merge
+(new `migrations/versions/0001_initial.py`, `tests/conftest.py` now uses a temp SQLite file and adds `db_schema` /
+`db_session`, `tests/acceptance/api_steps.py` gains the typed args and negative steps; then `ekit baseline accept`).
+Re-approve the design (`ekit design approve --by`) to place the W0 scope in an existing empty wave plan.
+Upgrading to 0.7.2: no action for classic projects. A happy-path golden project gets golden 1.1.2 (only
+`tests/acceptance/api_steps.py` changes; `ekit baseline accept`). Accepted decisions in `design.yaml` whose ADR does not mention the
+decision id or title now fail `DESIGN-DECISIONS`: add `Decision: D1` to the ADR (or recreate it with `ekit adr new --decision D1`).
+Projects vendored before 0.1.4 have no CLI pin: `ekit doctor` says so until
 `ekit upgrade` records one.
 
 Moving to 0.1.5 can turn existing results red on purpose: overrides without `approved_by`/`expires` stop

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ t("signin.title") }}{% endblock %}
+{% block content %}
+  <h1>{{ t("signin.title") }}</h1>
+  <form method="post" action="/signin">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>{{ t("signin.username") }} <input name="username" autocomplete="username" required></label>
+    <label>{{ t("signin.password") }} <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">{{ t("signin.submit") }}</button>
+  </form>
+{% endblock %}

@@ -34,6 +34,11 @@ $ARGUMENTS
 4. Style: declarative (what, not how-to-click), one behaviour per scenario, concrete example
    data, `Scenario Outline` + `Examples` for rule tables. Cover the negative paths the spec and
    baseline imply: validation failure (SEC-03), forbidden (SEC-02), audit event (OBS-05).
-   No UI selectors, no SQL, no implementation detail.
+   No UI selectors, no SQL, no implementation detail. Before running the gate, re-read each
+   scenario's own Given/When steps in isolation — no credit for what a sibling scenario set up;
+   each scenario runs from a fresh state — and confirm every precondition its Then needs is
+   actually present in that scenario, not assumed from the one above it. `GHERKIN-UI-ENTRY`
+   catches the common case of this (a `@ui` scenario that acts on a page with no preceding
+   open/navigate step and no `Background`), but it's a heuristic, not a guarantee.
 5. Run `ekit gate scenarios`. Fix and re-run until it passes.
 6. Report the scenario count per AC and the next step (`__SPECKIT_COMMAND_PLAN__`).

@@ -41,6 +41,13 @@ layout:          # relative to the stack's backend root
     - src/test/resources/junit-platform.properties
     - Dockerfile
     - .gitignore
+  pipeline_paths:     # 0.6.0: all a brownfield repository needs for red/green
+    - pom.xml
+    - mvnw
+    - mvnw.cmd
+    - .mvn/wrapper/maven-wrapper.properties
+    - src/test/resources/junit-platform.properties
+    - .gitignore
 
 # {mvnw} resolves to mvnw.cmd on Windows and ./mvnw on POSIX (falls back to mvn on PATH).
 commands:

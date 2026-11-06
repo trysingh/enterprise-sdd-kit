@@ -7,6 +7,10 @@ CATALOG: dict[str, dict[str, str]] = {
         "app.skip_to_content": "Skip to content",
         "home.title": "Welcome",
         "home.body": "The application is running.",
+        "signin.title": "Sign in (development users)",
+        "signin.username": "User",
+        "signin.password": "Password",
+        "signin.submit": "Sign in",
     },
 }
 DEFAULT_LOCALE = "en"

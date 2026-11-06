@@ -95,6 +95,33 @@ def git(root: Path, *args: str) -> str | None:
         return None
 
 
+def git_state(root: Path) -> str:
+    """Why git is (not) usable in `root`: 'ok' | 'no-git' (not on PATH) | 'dubious' (safe.directory) | 'not-repo'."""
+    exe = shutil.which("git")
+    if not exe:
+        return "no-git"
+    try:
+        res = subprocess.run([exe, "rev-parse", "--is-inside-work-tree"], cwd=root, capture_output=True, text=True)
+    except OSError:
+        return "no-git"
+    if res.returncode == 0 and res.stdout.strip() == "true":
+        return "ok"
+    if "dubious ownership" in (res.stderr or ""):
+        return "dubious"
+    return "not-repo"
+
+
+def git_problem(root: Path, state: str, what: str) -> str:
+    """Warning text for a non-'ok' git_state: the cause and the fix."""
+    if state == "dubious":
+        return (f"git refuses to read this repository (dubious ownership): {what}; run "
+                f"`git config --global --add safe.directory {root}`")
+    if state == "no-git":
+        return f"git is not installed or not on PATH: {what}; install git"
+    return (f"not a git repository: {what}; run "
+            f"`git init && git add -A && git commit -m \"baseline before ekit\"`")
+
+
 @dataclass
 class Profile:
     id: str
@@ -190,6 +217,11 @@ class Project:
         config = load_yaml(root / EKIT_DIR / PROJECT_FILE) or {}
         kit = Kit.load(root / EKIT_DIR / KIT_DIR)
         return cls(root=root, config=config, kit=kit)
+
+    @property
+    def is_brownfield(self) -> bool:
+        """Adopted repository (`mode: brownfield` in .ekit/project.yaml); greenfield when absent."""
+        return str(self.config.get("mode") or "greenfield").lower() == "brownfield"
 
     # ---------------------------------------------------------------- stack
     @property

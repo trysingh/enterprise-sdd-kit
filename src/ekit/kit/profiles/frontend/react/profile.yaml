@@ -40,6 +40,12 @@ layout:          # relative to the stack's frontend root
     - acceptance/support/world.ts
     - src/main.tsx
     - src/api/client.ts
+  pipeline_paths:     # 0.6.0: all a brownfield repository needs for red/green
+    - package.json
+    - package-lock.json
+    - .nvmrc
+    - cucumber.js
+    - acceptance/support/world.ts
 
 # npm scripts are the contract; the landing-zone task creates them in package.json.
 commands:

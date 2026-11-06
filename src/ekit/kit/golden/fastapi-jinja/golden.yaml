@@ -11,8 +11,8 @@ apiVersion: ekit/v1
 kind: GoldenLandingZone
 metadata:
   stack: fastapi-jinja
-  version: 1.0.1            # golden revision; bump on any change under tree/
-  description: FastAPI + server-rendered Jinja2, uv, pytest-bdd; typed scenario context and shared steps
+  version: 1.1.2            # golden revision; bump on any change under tree/
+  description: FastAPI + server-rendered Jinja2, uv, pytest-bdd; typed scenario context, shared steps, Day-0 seams (dev-user principal, audit, request id, data owner) and a generic API step library for journeys
 
 # Files whose text contains __PROJECT_NAME__ / __PROJECT_SLUG__ placeholders (replaced on install).
 render:
@@ -27,6 +27,7 @@ rename:
   dot_python-version: .python-version
   dot_dockerignore: .dockerignore
   dot_pre-commit-config.yaml: .pre-commit-config.yaml
+  dot_gitleaks.toml: .gitleaks.toml
 
 # Golden core: the agent's edit tools are denied here (permission.edit in opencode.json), and the
 # baseline and green gates fail if any of these files differ from .ekit/golden.lock.yaml.
@@ -37,6 +38,7 @@ frozen:
   - src/app/core/**
   - src/app/api/**
   - src/app/web/**
+  - src/app/templates/signin.html
   - src/app/templates/base.html
   - src/app/templates/home.html
   - src/app/templates/features/reference/**
@@ -46,15 +48,32 @@ frozen:
   - tests/conftest.py
   - tests/acceptance/conftest.py
   - tests/acceptance/support/**
+  - tests/acceptance/api_steps.py
   - tests/acceptance/test_000_landing_zone.py
+  - tests/acceptance/test_000_signin.py
   - tests/acceptance/test_000_reference_slice.py
   - tests/unit/test_core_*.py
   - tests/unit/test_reference_*.py
   - specs/000-landing-zone/**
   - specs/000-reference-slice/**
   - migrations/env.py
+  - migrations/versions/0001_initial.py
+  - .gitleaks.toml
   - Dockerfile
   - docs/engineering/baseline-conformance.md
+
+# Day-0 seams (1.1.0): P2 of the happy-path-first design: cross-cutting concerns exist from the first line
+# as interfaces with dummy implementations. `BASE-SEAMS-PRESENT` checks that these symbols still exist in
+# the core; `GREEN-NO-DUMMY` (enterprise rigor) fails while the dummies are wired for a non-dev environment.
+day0_seams:
+  principal:  {file: src/app/core/principal.py,  symbols: [Principal, DevUserProvider, get_principal]}
+  audit:      {file: src/app/core/audit.py,      symbols: [AuditSink, LogAuditSink, get_audit_sink]}
+  request_id: {file: src/app/core/requestid.py,  symbols: [RequestIdMiddleware]}
+  config:     {file: src/app/core/settings.py,   symbols: [Settings, get_settings]}
+  data_owner: {file: src/app/core/ownership.py,  symbols: [OwnedMixin]}
+dummies:                                           # what GREEN-NO-DUMMY looks for in non-dev environment files
+  - {setting: APP_PRINCIPAL_PROVIDER, value: dev-users}
+  - {setting: APP_AUDIT_SINK, value: log}
 
 # Where feature work goes. Listed for the agent (AGENTS.md) and for `ekit feature package`.
 seams:
@@ -78,9 +97,12 @@ post_install:
 
 agent_rules: |
   - Golden landing zone (fastapi-jinja, `ekit baseline status`). Core files are frozen against your edit tools: `src/app/main.py`, `src/app/core/**`, `src/app/api/**`, `src/app/web/**`, the base templates, `tests/acceptance/conftest.py`, `tests/acceptance/support/**` and the `000-*` scenarios. A refused edit there is by design: stop and report what you needed.
-  - Feature code goes in the feature's own package: `ekit feature package <NNN-slug>` prints it (e.g. `src/app/features/f003_conversation_history/`). Register its router in `src/app/features/registry.py`. Templates go in `src/app/templates/features/<slug>/`, migrations in `migrations/versions/`, unit tests in `tests/unit/features/`.
+  - Feature code goes in the feature's own package: `ekit feature package <NNN-slug>` prints it (e.g. `src/app/features/f003_conversation_history/`). Register its router in `src/app/features/registry.py`. Templates go in `src/app/templates/features/<slug>/`, migrations in `migrations/versions/` (ONE revision per slice, chained from `0001_initial.py`; see its docstring; tests use the `db_schema` / `db_session` fixtures, which build the schema from `Base.metadata` in a temp SQLite file), unit tests in `tests/unit/features/`.
   - Settings for a feature: declare a `pydantic_settings.BaseSettings` class in the feature package with its own `env_prefix` (e.g. `APP_CHAT_`), built once like `app.core.settings.get_settings()`. Never edit core settings for a feature and never read `os.environ`.
   - Stubs before implementation: call `app.core.errors.not_implemented()` (a 501 problem document). Red tests then fail on an assertion about the status, which is what `RED-CLEAN-FAILURE` expects.
+  - Day-0 seams (`design.yaml` `seams:`): identify the caller with `Depends(get_principal)` (a `Principal`; dev users from `config/dev-users.yaml`, HTTP Basic or the /signin page), record state changes with `AuditSink.record(actor, action, target, data)` from `get_audit_sink`, give every feature table an `owner_id` column (`OwnedMixin`), read settings from env only. Never read headers for identity yourself. Real identity and audit replace the dummies in a later wave; business code does not change.
+  - Operations: give every route `operation_id="snake_case_name"` exactly as `design.yaml` lists it; journeys and the trace matrix address operations by that id.
+  - Journeys (W0): Gherkin in `tests/acceptance/journeys/*.feature` tagged `@J-nn @FEAT-nn`, collected by `tests/acceptance/journeys/test_journeys.py` (binds the whole folder); use the generic API steps from `tests/acceptance/api_steps.py` (`Given I am signed in as "asha"`, `When I call "send_message" with peer "ravi" and body "hi"`, `Then the call succeeds`, `And I remember "id" from the response as "msg"`). `ekit run journeys` writes `reports/journeys.json` for `ekit gate smoke`.
   - Acceptance steps: use the shared steps in `tests/acceptance/conftest.py` first (`the application is running`, `I GET "..."`, `I POST JSON to "..." with`, `the response status is N`, `the response JSON field "x" equals "y"`, `the response is a problem document with code "..."`, `the page contains "..."`). Write a feature-specific step only for domain language.
   - Scenario state: every step takes `ctx: ScenarioContext` and uses `ctx.remember(key, value)` / `ctx.recall(key)`. Never create a dict fixture or index `scenario_state[...]` (`RED-STATE-TYPED`). `ctx.recall` of a key this scenario never set raises `MissingScenarioStateError`, and red rejects it: a Given in *this* scenario must set what its Then reads.
   - Reference slice: `specs/000-reference-slice/`, `src/app/features/f000_reference/` and `tests/acceptance/test_000_reference_slice.py` show one complete feature. Copy the shape; never import from it, bind its feature file, reuse its `@SCN-000-*` ids, or name anything after it (`RED-NO-EXEMPLAR`).

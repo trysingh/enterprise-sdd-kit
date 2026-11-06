@@ -17,9 +17,10 @@ from app.core.errors import install_error_handlers
 from app.core.http import close_http
 from app.core.logging import configure_logging
 from app.core.middleware import install_middleware
+from app.core.principal import dev_provider
 from app.core.settings import Settings, get_settings
 from app.features import registry
-from app.web import STATIC_DIR, pages
+from app.web import STATIC_DIR, pages, signin
 
 
 @asynccontextmanager
@@ -45,6 +46,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(pages.router)
+    if settings.principal_provider == "dev-users":
+        dev_provider(settings.dev_users_file, settings.env)  # refuses to start unless APP_ENV is dev|test
+        app.include_router(signin.router)  # dev-user sign-in page; gone with the dev provider
     if settings.reference_slice_mounted:
         from app.features.f000_reference import api as reference_api
         from app.features.f000_reference import web as reference_web

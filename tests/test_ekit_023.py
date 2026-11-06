@@ -87,6 +87,8 @@ def _project(tmp_path) -> Path:
 
 def _fake_run(seen: dict, status: str, error_message: str | None = None):
     def fake(prof, name, **_):
+        if name != "acceptance":
+            return None     # e.g. RED-LINT's `lint` command: not defined by this fake profile
         seen["stub_content_during_red"] = (prof.root / "src/app/stub.py").read_text(encoding="utf-8")
         seen["new_module_present_during_red"] = (prof.root / "src/app/new_module.py").is_file()
         report = prof.root / prof.bdd["report"]
@@ -168,4 +170,4 @@ def test_source_dirs_and_patterns_for_fastapi_jinja(tmp_path):
 
 def test_bundled_kit_requires_the_023_cli():
     from ekit.project import Kit, bundled_kit_dir
-    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.5.0,<0.6"
+    assert yaml.safe_load((bundled_kit_dir() / "kit.yaml").read_text())["requires"]["ekit"] == ">=0.7.0,<0.8"

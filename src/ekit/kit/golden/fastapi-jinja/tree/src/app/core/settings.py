@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     oidc_audience: str | None = None
     oidc_jwks_url: str | None = None
 
+    # Day-0 seams (golden 1.1.0). "dev-users" is refused unless env is dev|test (DevUserProvider);
+    # a later wave switches to "oidc" and a durable audit sink.
+    principal_provider: Literal["dev-users", "oidc"] = "dev-users"
+    dev_users_file: str = "config/dev-users.yaml"
+    audit_sink: Literal["log"] = "log"
+
     # Browser security (SEC-06, SEC-08)
     cors_origins: list[str] = Field(default_factory=list)
     csrf_cookie_name: str = "csrftoken"

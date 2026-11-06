@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core.requestid import RequestIdMiddleware
 from app.core.settings import Settings
 
 CORRELATION_HEADER = "X-Correlation-ID"
@@ -106,3 +107,4 @@ def install_middleware(app: FastAPI, settings: Settings) -> None:
         allow_headers=["Authorization", "Content-Type", CORRELATION_HEADER, CSRF_HEADER],
     )
     app.add_middleware(CorrelationMiddleware)
+    app.add_middleware(RequestIdMiddleware)  # Day-0 seam: X-Request-Id on every response and log line

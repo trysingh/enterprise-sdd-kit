@@ -48,6 +48,7 @@ Run `ekit change show --feature <feature>`. If it prints `none`, ignore this sec
    `tests/acceptance/conftest.py`. Copy their *shape*; never import the reference package, bind its
    feature file or reuse its ids (`RED-NO-EXEMPLAR`). The test module goes where
    `ekit context` / the golden seams say (`tests/acceptance/test_<NNN>_<slug>.py`).
+   **Not golden** (`ekit baseline status` says `generate`): there is no reference slice and no feature package; do not look for `test_000_reference_slice.py` or `f000_reference`. Put the test module at `tests/acceptance/test_<NNN>_<slug>.py` and production stubs where `plan.md` says. If `tests/acceptance/conftest.py` has no fixture that creates the application and an HTTP test client (e.g. FastAPI `TestClient` around the app factory or `app` from the project's main module), add them there first: this is additive and allowed. Write the tests BEFORE running `ekit gate red`; a red run with no tests fails and tells you nothing.
 2. Write step definitions for every step of every scenario in this feature, following the
    profile binding (pytest-bdd modules / Cucumber-JVM glue / cucumber-js steps). Steps call the
    system through its public interface (HTTP API or browser), never internals.
@@ -58,6 +59,13 @@ Run `ekit change show --feature <feature>`. If it prints `none`, ignore this sec
    Every step of every scenario needs a definition the binding module can see (itself, a `conftest.py`, or a module
    it imports), with the right keyword type: the gate checks this statically (`RED-STEPS-BOUND`), because a scenario
    that fails at an early step would otherwise hide a later step that has no definition at all.
+   A `Given` step that simulates an outage/failure for a `Then` that checks error-handling behaviour must wire a
+   real fault into the app under test (e.g. a FastAPI `app.dependency_overrides` override on the specific
+   capability/dependency the scenario means to break, not the whole shared DB session, which would also break
+   unrelated reads/writes earlier or later in the same scenario), not just record a flag with `ctx.remember(...)`.
+   The gate surfaces an unwired fault step as a warning at red (`RED-STEPS-ASSERT`, `bdd.vacuous_steps`'s fault-step
+   scan), before freeze, so fix it in the same commit rather than deferring it: once the file is frozen a fix needs
+   `ekit unfreeze`.
    Each step function must be **self-contained**: never assume shared state (a dict key, a fixture value) was set
    by a step that belongs to a *different* scenario. In a golden landing zone every step takes
    `ctx: ScenarioContext` and uses `ctx.remember(...)` / `ctx.recall(...)`; a dict fixture or `scenario_state[...]`
@@ -85,11 +93,15 @@ Run `ekit change show --feature <feature>`. If it prints `none`, ignore this sec
    than writing red for the first time), edit **only** the test file(s) named for that fix in this
    turn — no production code, no unrelated tasks, even ones still open on the task list. Mixing in
    other work here is exactly how a "fix the test" commit ends up not fixing the test.
-6. When the gate passes, `ekit` freezes the feature files and bound tests against agent edits (`opencode.json`
+6. If the gate report shows `RED-LINT` as a warning, fix the lint issue now, in the same commit as red: the
+   feature's `.feature` and test files are not frozen yet at this point, so this is ordinary editing, not an
+   unfreeze. Do not skip or wave off the warning, and do not defer it to green — green's own lint check
+   (`GREEN-LINT`) will fail on it only after freeze, by which point fixing it needs `ekit unfreeze`.
+7. When the gate passes, `ekit` freezes the feature files and bound tests against agent edits (`opencode.json`
    deny rules). Tell the user: restart OpenCode before the next step so the freeze is applied. A wrong test
    is lifted only by the user with `ekit unfreeze <feature> --reason "..."`.
-7. Tell the user to commit now, before any implementation: the `.feature` files, the tests, `.ekit/ledger/`,
+8. Tell the user to commit now, before any implementation: the `.feature` files, the tests, `.ekit/ledger/`,
    `.ekit/freeze.yaml` and `opencode.json` (suggested message: `test(<NNN>): red for SCN-...`). The ledger is the
    evidence that tests came first, and `ekit gate red-recorded` / `green` fail (`REDREC-COMMITTED`) until the files
    recorded at red are committed exactly as recorded.
-8. Hand off to `__SPECKIT_COMMAND_IMPLEMENT__`.
+9. Hand off to `__SPECKIT_COMMAND_IMPLEMENT__`.

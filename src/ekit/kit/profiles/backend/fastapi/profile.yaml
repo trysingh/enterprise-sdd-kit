@@ -45,6 +45,13 @@ layout:          # relative to the stack's backend root
     - tests/acceptance/conftest.py
     - Dockerfile
     - .gitignore
+  pipeline_paths:     # 0.6.0: all a brownfield repository needs for red/green; the rest of required_paths applies to new code
+    - pyproject.toml
+    - uv.lock
+    - .python-version
+    - tests/unit
+    - tests/acceptance/conftest.py
+    - .gitignore
 
 # Every command is an argv list (no shell) so it runs the same on Windows and POSIX.
 # Exit code 0 = pass. `report` is the Cucumber-JSON file the acceptance run writes.
@@ -57,6 +64,8 @@ commands:
   typecheck_glue:  ["uv", "run", "--locked", "mypy", "--follow-imports=silent", "--show-error-codes", "--no-error-summary"]
   unit:       ["uv", "run", "--locked", "pytest", "tests/unit", "-q"]
   acceptance: ["uv", "run", "--locked", "pytest", "tests/acceptance", "-q", "--cucumberjson=reports/cucumber-backend.json"]
+  # 0.7.0: happy-path journeys (+ the golden sign-in self-test); writes reports/journeys.json and reports/openapi.json
+  journeys:   ["uv", "run", "--locked", "pytest", "tests/acceptance/journeys", "tests/acceptance/test_000_signin.py", "-q"]
   coverage:   ["uv", "run", "--locked", "pytest", "tests", "-q", "--cov=src/app", "--cov-fail-under=80"]
   sca:        ["uv", "run", "--locked", "pip-audit"]
 

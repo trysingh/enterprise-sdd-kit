@@ -88,7 +88,7 @@ ADR_TEMPLATE = """# ADR-{num}: {title}
 """
 
 
-def new_adr(root: Path, title: str) -> Path:
+def new_adr(root: Path, title: str, decision: str | None = None) -> Path:
     title = title.strip()
     if not title:
         raise EkitError('ekit adr new "Title of the decision"')
@@ -97,5 +97,17 @@ def new_adr(root: Path, title: str) -> Path:
     taken = [int(m.group(1)) for f in d.glob("*.md") if (m := re.match(r"^(\d{4})-", f.name))]
     num = f"{(max(taken) + 1) if taken else 1:04d}"
     path = d / f"{num}-{_slug(title)}.md"
-    path.write_text(ADR_TEMPLATE.format(num=num, title=title), encoding="utf-8", newline="\n")
+    text = ADR_TEMPLATE.format(num=num, title=title)
+    if decision:
+        decision = decision.strip()
+        dtitle = ""
+        if (root / "docs" / "design" / "design.yaml").is_file():
+            from .design import load_design
+            found = [x for x in load_design(root).get("decisions") or [] if isinstance(x, dict) and str(x.get("id")) == decision]
+            if not found:
+                raise EkitError(f"design.yaml has no decision {decision} (see `decisions:` in docs/design/design.yaml)")
+            dtitle = str(found[0].get("title") or "")
+        ref = f"**Decision**: {decision}" + (f" ({dtitle})" if dtitle else "")
+        text = text.replace("**Status**: Proposed\n", f"**Status**: Proposed\n\n{ref} in docs/design/design.yaml\n", 1)
+    path.write_text(text, encoding="utf-8", newline="\n")
     return path

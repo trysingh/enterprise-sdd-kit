@@ -59,10 +59,17 @@ text, or both, optionally with `slug=<name>`. If it is empty, ask for the BRD an
    (role, e.g. "Product Manager"), `status: open`.
    Where the PRD needs a placeholder, write `[TBD: OQ-007]` so it's visible.
 
+   **Happy path (only when `ekit design status` says `lane: happy-path`).** Also write
+   `happy-path.md` from `ekit template esdlc-happy-path-template`: per `FEAT-` who does what and
+   what they and others then see (`Key: yes` unless the BRD says it can wait), plus cross-feature
+   journeys `J-01`… that list the features they span. Every key feature must be in a journey.
+
 6. **Gate.** Run `ekit gate intake --prd docs/requirements/<slug>`. Fix every error it reports
    and re-run until it passes. Do not hand-edit around the gate.
 
-7. **Waves (optional, ask once).** Run `ekit wave status --brief`.
+7. **Waves (optional, ask once).** Run `ekit wave status --brief`. Happy-path lane (`ekit design status`
+   says `lane: happy-path`): skip this step; W0 scope comes from the design slices when a person approves the
+   design, and every other AC is proposed for W1 (`ekit wave approve --by` confirms it).
    - `waves: undecided` → ask the user once: *"Do you want to deliver this product in waves (MVP1
      showing the overall face of the system with a minimal frontend and backend, later waves
      deepening it)?"* If yes, tell them to run `ekit wave init` and edit

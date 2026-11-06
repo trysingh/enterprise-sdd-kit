@@ -11,6 +11,8 @@ FEATURE_RE = re.compile(r"^\s*Feature\s*:\s*(.*)$")
 RULE_RE = re.compile(r"^\s*Rule\s*:")
 TAG_LINE_RE = re.compile(r"^\s*@")
 EXAMPLES_RE = re.compile(r"^\s*(Examples|Scenarios)\s*:")
+BACKGROUND_RE = re.compile(r"^\s*Background\s*:")
+STEP_KEYWORD_RE = re.compile(r"^\s*(Given|When|Then|And|But|\*)\b\s*(.*)$")
 
 
 @dataclass
@@ -20,6 +22,7 @@ class Scenario:
     file: Path
     line: int
     steps: int = 0
+    step_lines: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -29,6 +32,7 @@ class FeatureFile:
     tags: list[str] = field(default_factory=list)
     scenarios: list[Scenario] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    has_background: bool = False
 
 
 def _tags(line: str) -> list[str]:
@@ -57,14 +61,21 @@ def parse_feature(path: Path) -> FeatureFile:
         if RULE_RE.match(raw) or EXAMPLES_RE.match(raw):
             pending = []  # tags on Rule/Examples blocks are not scenario-identity tags
             continue
+        if BACKGROUND_RE.match(raw):
+            ff.has_background = True
+            current = None  # steps under Background are not a scenario's own steps
+            pending = []
+            continue
         m = SCENARIO_RE.match(raw)
         if m:
             current = Scenario(name=m.group(2).strip(), tags=ff.tags + pending, file=path, line=i)
             ff.scenarios.append(current)
             pending = []
             continue
-        if re.match(r"^\s*(Given|When|Then|And|But|\*)\b", raw) and current is not None:
+        sm = STEP_KEYWORD_RE.match(raw)
+        if sm and current is not None:
             current.steps += 1
+            current.step_lines.append(sm.group(2).strip())
     if ff.name is None:
         ff.errors.append(f"{path.name}: no 'Feature:' line")
     if not ff.scenarios:

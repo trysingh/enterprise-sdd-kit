@@ -41,6 +41,9 @@ ALWAYS_BASH = [
     "ekit baseline accept*",
     "ekit baseline install*",
     "ekit change retire*",       # 0.5.0: retiring a delivered scenario is a person's decision
+    "ekit baseline enforce*",    # 0.6.0: the ratchet is a person's decision (one way)
+    "ekit constitution lock*",   # 0.6.0: adopting the team's principles V–VIII is a person's decision
+    "ekit design approve*",      # 0.7.0: approving the design (topology, ports, slices) is a person's decision
 ]
 
 
@@ -258,7 +261,7 @@ def verify(root: Path) -> list[tuple[bool, str, str]]:
     brules = brules if isinstance(brules, dict) else {}
     bmissing = [pat for pat in ALWAYS_BASH if brules.get(pat) != "deny"]
     rows.append((not bmissing, "agent cannot run approval commands",
-                 "ekit unfreeze / fix-red / upgrade / wave approve|advance|decline / models / baseline unfreeze|accept|install" if not bmissing
+                 "ekit unfreeze / fix-red / upgrade / wave approve|advance|decline / design approve / models / baseline unfreeze|accept|install" if not bmissing
                  else f"missing bash deny for {', '.join(bmissing)}: run `ekit sync`"))
     if state.get("baseline_patterns"):
         if state.get("baseline"):

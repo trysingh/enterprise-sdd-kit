@@ -43,6 +43,7 @@ class GateResult:
     description: str
     context: dict[str, str]
     checks: list[CheckResult]
+    rigor: str | None = None                      # 0.7.0: level of the current wave; None = not configured
 
     @property
     def passed(self) -> bool:
@@ -99,6 +100,14 @@ def wave_notes(project: Project) -> list[str]:
     if inactive:
         notes.append(f"not active in {plan.current}: {', '.join(p.id for p in inactive)}. Their commands, paths, "
                      "environment and BDD runs are skipped, and NFRs that apply only to them are not required yet")
+    from . import design as design_mod
+    lane = str((project.config or {}).get("lane") or "classic")
+    w0 = next((w for w in plan.waves if str(w.get("id")) == "W0"), None)
+    if (lane == "happy-path" and w0 is not None and not w0.get("scope")
+            and not (project.root / design_mod.APPROVAL).is_file()):
+        notes.append("info: waves will be placed when the design is approved (`ekit design approve --by \"Name\"`); "
+                     "until then W0 has no scope, which is expected")
+        return notes
     errors, _ = validate(plan, project.kit, catalog_ids(project.kit))
     if errors:
         notes.append(f"the approved wave plan is no longer valid ({len(errors)} problem(s), e.g. {errors[0]}); "
@@ -120,6 +129,13 @@ def gate_ids(project: Project) -> list[str]:
     return [g["id"] for g in load_policy(project)["spec"]["gates"]]
 
 
+def default_gate_ids(project: Project) -> list[str]:
+    """What `ekit gate all` runs: gates marked `lane: happy-path` (design, smoke) only in that lane, so
+    projects without it behave exactly as in 0.6.4."""
+    lane = str((project.config or {}).get("lane") or "classic")
+    return [g["id"] for g in load_policy(project)["spec"]["gates"] if g.get("lane") in (None, lane)]
+
+
 def run_gate(
     project: Project, gate_id: str, *, feature: str | None = None, prd: str | None = None
 ) -> tuple[GateResult, list[str]]:
@@ -134,18 +150,30 @@ def run_gate(
         notes.insert(0, pin.message())
     notes += wave_notes(project)
 
+    from . import rigor as rigor_mod
+    rpol = rigor_mod.load_policy(project.kit)
+    rlevel = rigor_mod.level(project) if rpol else None
     ctx = GateContext(project=project)
     kind = gate.get("context", "project")
-    if kind == "feature":
-        ctx.feature_dir = project.resolve_feature(feature)
-        try:
-            ctx.prd_dir = project.resolve_prd(prd, ctx.feature_dir)
-        except EkitError:
-            ctx.prd_dir = None
-    elif kind == "prd":
-        if feature:
+    if rlevel and gate.get("checks") and all(
+            rigor_mod.decide(rpol, rlevel, gate_id, c["id"]) not in (None, "omit") for c in gate["checks"]):
+        kind = "project"          # every check is off at this rigor level: no feature / PRD needed to say so
+    try:
+        if kind == "feature":
             ctx.feature_dir = project.resolve_feature(feature)
-        ctx.prd_dir = project.resolve_prd(prd, ctx.feature_dir)
+            try:
+                ctx.prd_dir = project.resolve_prd(prd, ctx.feature_dir)
+            except EkitError:
+                ctx.prd_dir = None
+        elif kind == "prd":
+            if feature:
+                ctx.feature_dir = project.resolve_feature(feature)
+            ctx.prd_dir = project.resolve_prd(prd, ctx.feature_dir)
+    except EkitError:
+        if not rlevel:
+            raise
+        # rigor configured (0.7.0): checks that are switched off need no feature; the ones that run and need
+        # {feature_dir} / {prd_dir} report "cannot resolve" themselves
 
     mapping = {}
     if ctx.feature_dir:
@@ -157,6 +185,12 @@ def run_gate(
     for chk in gate.get("checks", []):
         cid, ctype = chk["id"], chk["type"]
         severity = chk.get("severity", defaults.get("severity", "error"))
+        why = rigor_mod.decide(rpol, rlevel, gate_id, cid) if rpol else None
+        if why == "omit":
+            continue
+        if why:
+            results.append(CheckResult(id=cid, type=ctype, severity=severity, skipped=why))
+            continue
         ov = overrides.get(cid, {})
         if "severity" in ov:
             severity = ov["severity"]
@@ -182,7 +216,11 @@ def run_gate(
             cr.findings = [Finding("error", str(exc))]
         results.append(cr)
 
-    res = GateResult(gate_id, gate.get("description", ""), mapping, results)
+    res = GateResult(gate_id, gate.get("description", ""), mapping, results, rigor=rlevel)
+    if rlevel:
+        skipped = [c.id for c in results if (c.skipped or "").startswith("rigor ")]
+        notes.append(f"rigor: {rlevel}" + (f"; skipped because of it: {', '.join(skipped)}" if skipped
+                                           else "; nothing skipped"))
     if res.passed and ctx.pending_records:
         checks_mod.flush_pending_records(ctx, results)
     if gate.get("record") and res.passed:
@@ -221,6 +259,8 @@ def render_json(res: GateResult, notes: list[str]) -> str:
         "passed": res.passed,
         "context": res.context,
         "notes": notes,
+        **({"rigor": res.rigor, "rigor_skipped": [c.id for c in res.checks if (c.skipped or "").startswith("rigor ")]}
+           if res.rigor else {}),
         "checks": [
             {"id": c.id, "type": c.type, "severity": c.severity, "status": c.status,
              "skipped": c.skipped, "findings": [f.__dict__ for f in c.findings]}

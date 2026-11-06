@@ -14,15 +14,18 @@ principles I–VIII, which only pull-request review protected. Both are mechanic
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
 
-from .project import EkitError
+from .project import EkitError, dump_yaml, load_yaml
 
 MEMORY = ".specify/memory/constitution.md"
 TEMPLATE = "templates/constitution-template.md"
 PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z0-9_]*\]")
+LOCK = ".ekit/constitution.lock.yaml"
+TEAM = ["V", "VI", "VII", "VIII"]   # 0.6.0: in a brownfield project a person may lock the team's own V–VIII
 ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
 _HEADING_RE = re.compile(r"^###\s+([IVXLC]+)\.\s*(.*)$")
 
@@ -100,16 +103,74 @@ def principles(text: str) -> dict[str, str]:
     return out
 
 
-def principles_drift(project: Any) -> tuple[str, list[str]]:
-    """('missing' | 'unratified' | 'changed' | 'intact', details)."""
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def read_lock(root: Path) -> dict[str, Any] | None:
+    p = root / LOCK
+    return (load_yaml(p) or {}) if p.is_file() else None
+
+
+def lock(project: Any) -> list[str]:
+    """Brownfield, a person: record the sha256 of principles V–VIII as they stand in the ratified constitution."""
+    from .ratchet import actor
+    import datetime
+    if not project.is_brownfield:
+        raise EkitError("`ekit constitution lock` is for adopted (brownfield) projects; in a greenfield project "
+                        "principles I–VIII must match the kit template.")
+    state, details = principles_drift(project, ignore_lock=True)
+    mem = project.root / MEMORY
+    if state == "missing":
+        raise EkitError(details[0])
+    have = principles(mem.read_text(encoding="utf-8"))
+    want = principles(template_path(project).read_text(encoding="utf-8"))
+    bad = [n for n in ROMAN if n not in TEAM and have.get(n) != want.get(n)]
+    if bad:
+        raise EkitError(f"principle(s) {', '.join(bad)} differ from the kit template; I–IV cannot be locked. "
+                        f"Restore them first (`ekit constitution check`).")
+    absent = [n for n in TEAM if n not in have]
+    if absent:
+        raise EkitError(f"principle(s) {', '.join(absent)} are missing from {MEMORY}; nothing to lock.")
+    data = {"principles": {n: _sha(have[n]) for n in TEAM},
+            "by": actor(project.root),
+            "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    dump_yaml(data, project.root / LOCK)
+    differing = [n for n in TEAM if have[n] != want.get(n)]
+    return [f"locked principles {', '.join(TEAM)} in {LOCK}"
+            + (f" ({', '.join(differing)} differ from the kit template: your team's text is now the reference)"
+               if differing else " (they equal the kit template)")]
+
+
+def principles_drift(project: Any, *, ignore_lock: bool = False) -> tuple[str, list[str]]:
+    """('missing' | 'unratified' | 'changed' | 'intact', details).
+
+    I–IV always match the kit template. V–VIII match the template too, except in a brownfield project
+    with `.ekit/constitution.lock.yaml`: then they match the lock (0.6.0)."""
     mem = project.root / MEMORY
     if not mem.is_file():
         return "missing", [f"{MEMORY} does not exist (`ekit constitution ratify` creates and ratifies it)"]
     text = mem.read_text(encoding="utf-8")
     want = principles(template_path(project).read_text(encoding="utf-8"))
     have = principles(text)
-    changed = [f"principle {n} {'is missing' if n not in have else 'differs from the kit template'}"
-               for n in ROMAN if n in want and have.get(n) != want[n]]
+    brown = bool(getattr(project, "is_brownfield", False))
+    lk = read_lock(project.root) if (brown and not ignore_lock) else None
+    locked = (lk or {}).get("principles") or {}
+    changed = []
+    for n in ROMAN:
+        if n not in want:
+            continue
+        if lk is not None and n in TEAM:
+            if n not in have:
+                changed.append(f"principle {n} is missing")
+            elif locked.get(n) != _sha(have[n]):
+                changed.append(f"principle {n} differs from {LOCK} (a person re-runs `ekit constitution lock` "
+                               "if the team changed it on purpose)")
+        elif have.get(n) != want[n]:
+            hint = ""
+            if brown and n in TEAM:
+                hint = " (to adopt your team's principles V–VIII a person runs `ekit constitution lock`)"
+            changed.append(f"principle {n} {'is missing' if n not in have else 'differs from the kit template'}{hint}")
     if changed:
         return "changed", changed
     if placeholders(text):

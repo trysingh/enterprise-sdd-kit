@@ -138,9 +138,9 @@ def test_route_stubbed_is_golden_only(tmp_path):
 def test_red_gate_order_has_the_new_checks_in_place():
     gates = Kit.load(bundled_kit_dir()).policy()["spec"]["gates"]
     red = next(g for g in gates if g["id"] == "red")
-    assert [c["id"] for c in red["checks"]][:8] == [   # 0.5.0 appends RED-BUG-REPRODUCED, RED-CHANGE-SUPERSEDES
+    assert [c["id"] for c in red["checks"]][:9] == [   # 0.5.0 appends RED-BUG-REPRODUCED, RED-CHANGE-SUPERSEDES; 0.6.2 inserts RED-LINT
         "RED-STEPS-ASSERT", "RED-STEPS-BOUND", "RED-STATE-TYPED", "RED-GLUE-TYPED",
-        "RED-NO-EXEMPLAR", "RED-RUN", "RED-CLEAN-FAILURE", "RED-ROUTE-STUBBED"]
+        "RED-NO-EXEMPLAR", "RED-RUN", "RED-CLEAN-FAILURE", "RED-LINT", "RED-ROUTE-STUBBED"]
     types = {c["id"]: c["type"] for c in red["checks"]}
     assert types["RED-GLUE-TYPED"] == "bdd.glue_typecheck" and types["RED-ROUTE-STUBBED"] == "bdd.route_stubbed"
     assert {"bdd.glue_typecheck", "bdd.route_stubbed"} <= set(checks.REGISTRY)

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import gherkin, stepscan
-from .project import EkitError, Project, dump_yaml, git, load_yaml
+from .project import EkitError, Project, dump_yaml, git, git_problem, git_state, load_yaml
 from .runner import run_profile_command
 
 
@@ -285,6 +285,11 @@ def no_open_blocking(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 # An ADR reference: "ADR-0007", "ADR 7" or a file under docs/adr/ ("docs/adr/0007-x.md", "adr/0007-x.md").
 # A bare date such as "2026-12" is NOT an ADR reference.
 ADR_REF_RE = re.compile(r"\bADR[- ]?\d+\b|\badr/\d{4}-", re.IGNORECASE)
+# Remediation reference for a Gap: ticket (ABC-123), task (T001), #123 or an ADR. NFR ids (SEC-01) and
+# scenario / PRD / gate-check ids (SCN-003-01, FEAT-01, AC-03, BASE-ENV) look like tickets and are excluded in `_remediation_ref`.
+TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+TASK_RE = re.compile(r"\bT\d{3}\b")
+ISSUE_RE = re.compile(r"(?<![\w&])#\d+\b")
 ROW_RE = re.compile(r"^\s*\|\s*`?([A-Z]{2,5}-\d{2})`?\s*\|(.*)\|\s*$")
 
 
@@ -298,6 +303,16 @@ def parse_conformance(text: str) -> dict[str, dict[str, str]]:
         cells += [""] * (4 - len(cells))
         rows[m.group(1)] = {"title": cells[0], "status": cells[1], "evidence": cells[2], "adr": cells[3]}
     return rows
+
+
+def duplicate_rows(text: str) -> dict[str, int]:
+    """NFR id -> number of rows, for ids that appear in more than one row (parse_conformance keeps the last)."""
+    count: dict[str, int] = {}
+    for line in text.splitlines():
+        m = ROW_RE.match(line)
+        if m:
+            count[m.group(1)] = count.get(m.group(1), 0) + 1
+    return {k: v for k, v in count.items() if v > 1}
 
 
 DEFERRED_STATUS_RE = re.compile(r"^Deferred\s*\(?\s*(W[\w-]*)\s*\)?$", re.IGNORECASE)
@@ -351,35 +366,103 @@ def wave_scope(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     return out
 
 
+def _remediation_ref(ctx: GateContext, row: dict[str, str]) -> str | None:
+    text = row["adr"] + " " + row["evidence"]
+    known = {n["id"] for n in ctx.project.kit.nfr_catalog().get("nfrs", [])}
+    for m in TICKET_RE.finditer(text):
+        ref = m.group(0)
+        if ref in known or ref.startswith(("SCN-", "FEAT-", "AC-", "RED-", "GREEN-", "BASE-")):
+            continue
+        return ref
+    for rx in (TASK_RE, ISSUE_RE, ADR_REF_RE):
+        m = rx.search(text)
+        if m:
+            return m.group(0)
+    return None
+
+
 @check("nfr.conformance")
 def nfr_conformance(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    from . import ratchet
+    brown = ctx.project.is_brownfield
+    platform = w.get("scope") == "platform"
+    # 0.6.0: the ratchet (`ekit baseline enforce`) applies to the platform table of a brownfield project
+    enforced = ratchet.enforced_ids(ctx.project.root) if (brown and platform) else set()
     text = _read(ctx, w["file"])
-    if text is None:
-        return _missing(ctx, w["file"])
     catalog = ctx.project.kit.nfr_catalog()
+    required = ctx.project.applicable_nfrs(scope=w.get("scope"))
+    titles = {n["id"]: n.get("title") for n in required}
+    out: list[Finding] = []
+    if text is None:
+        if brown and platform:
+            if not enforced:
+                return [Finding("info", f"no snapshot ({w['file']}); optional: /speckit.esdlc.baseline snapshot")]
+            return [Finding("error", f"{nid} is enforced (`ekit baseline enforce`) but {w['file']} does not exist; "
+                                     "it needs a row Addressed, N/A or Waived with an ADR")
+                    for nid in sorted(enforced) if nid in titles]
+        return _missing(ctx, w["file"])
     allowed = set(catalog.get("statuses") or ["Addressed", "N/A", "Waived"])
     rows = parse_conformance(text)
-    required = ctx.project.applicable_nfrs(scope=w.get("scope"))
-    out: list[Finding] = []
+    for nid, n in sorted(duplicate_rows(text).items()):
+        out.append(Finding("error", f"{nid}: {n} rows in {w['file']}; keep one"))
     for n in required:
         nid = n["id"]
         level = "error" if n.get("level") == "mandatory" else "warn"
         row = rows.get(nid)
+        pinned = nid in enforced
         if not row:
-            out.append(Finding(level, f"{nid} ({n.get('title')}) has no row in the conformance table"))
+            if pinned:
+                out.append(Finding("error", f"{nid} ({n.get('title')}) is enforced (`ekit baseline enforce`) and has no "
+                                            "row; it needs Addressed, N/A or Waived with an ADR"))
+            elif brown and platform:
+                out.append(Finding("info", f"{nid} ({n.get('title')}): no row; existing code is inherited as-is"))
+            else:
+                out.append(Finding(level, f"{nid} ({n.get('title')}) has no row in the conformance table"))
             continue
         status = row["status"].strip("*` ")
         deferred = DEFERRED_STATUS_RE.match(status)
         if deferred:
+            if pinned:
+                out.append(Finding("error", f"{nid} is enforced (`ekit baseline enforce`): it cannot be deferred; "
+                                            "Addressed, N/A or Waived with an ADR"))
+                continue
             out += _check_deferral(ctx, nid, deferred.group(1).upper())
             continue
         if status not in allowed:
             out.append(Finding("error", f"{nid}: status '{row['status']}' not in {sorted(allowed)}"))
             continue
+        if status == "Inherited":
+            if pinned:
+                out.append(Finding("error", f"{nid} is enforced (`ekit baseline enforce`): Inherited is no longer "
+                                            "accepted; it needs Addressed, N/A or Waived with an ADR"))
+            elif not brown:
+                out.append(Finding("error", f"{nid}: Inherited is for adopted (brownfield) repositories; "
+                                            "use Addressed, N/A, or Waived with an ADR"))
+            elif not platform:
+                out.append(Finding("error", f"{nid}: Inherited describes legacy code in the baseline snapshot; a "
+                                            "feature plan covers code the feature adds or changes (Addressed, N/A, "
+                                            "Gap or Waived with an ADR)"))
+            else:
+                note = row["evidence"] if row["evidence"] and not row["evidence"].startswith("[") else "accepted as-is"
+                out.append(Finding("info", f"{nid} inherited: {note}"))
+            continue
+        if pinned and status == "Gap":
+            out.append(Finding("error", f"{nid} is enforced (`ekit baseline enforce`): Gap is no longer accepted; "
+                                        "it needs Addressed, N/A or Waived with an ADR"))
+            continue
         if not row["evidence"] or row["evidence"].startswith("["):
             out.append(Finding("error", f"{nid}: '{status}' needs evidence or justification"))
         if status == "Waived" and not ADR_REF_RE.search(row["adr"] + " " + row["evidence"]):
             out.append(Finding("error", f"{nid}: Waived requires an ADR reference (e.g. ADR-0007)"))
+        if status == "Gap":
+            ref = _remediation_ref(ctx, row)
+            if ref is None:
+                out.append(Finding("error", f"{nid}: Gap needs a remediation reference (ticket, task or ADR id)"))
+            elif not brown:
+                out.append(Finding("error", f"{nid}: Gap is for adopted (brownfield) repositories; "
+                                            "use Addressed, N/A, or Waived with an ADR"))
+            else:
+                out.append(Finding("warn", f"{nid} gap: {row['evidence']} (remediation {ref})"))
     known = {n["id"] for n in catalog.get("nfrs", [])}
     for nid in rows:
         if nid not in known:
@@ -396,9 +479,28 @@ _MISSING_HINTS = {
 
 @check("profile.required_paths")
 def required_paths(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """Greenfield: every `layout.required_paths` entry is an error. Brownfield (0.6.0): only
+    `layout.pipeline_paths` (what the red/green gates need) are required, as errors; the rest of the
+    skeleton is not reported, because the baseline applies forward to new code."""
     out = []
+    brown = ctx.project.is_brownfield
     for prof in _active(ctx):
-        for rel in (prof.data.get("layout") or {}).get("required_paths", []) or []:
+        layout = prof.data.get("layout") or {}
+        required = layout.get("required_paths", []) or []
+        if brown:
+            pipeline = layout.get("pipeline_paths", []) or []
+            for rel in pipeline:
+                if not (prof.root / rel).exists():
+                    hint = _MISSING_HINTS.get(Path(rel).name, "")
+                    out.append(Finding("error", f"[{prof.id}] missing {ctx.project.rel(prof.root / rel)}{hint} "
+                                                "(brownfield: the pipeline needs it; adding it is additive and does "
+                                                "not touch existing code)"))
+            skipped = [r for r in required if r not in pipeline and not (prof.root / r).exists()]
+            if skipped:
+                out.append(Finding("info", f"[{prof.id}] brownfield: {len(skipped)} skeleton path(s) not required; "
+                                           "the baseline applies to new code"))
+            continue
+        for rel in required:
             if not (prof.root / rel).exists():
                 hint = _MISSING_HINTS.get(Path(rel).name, "")
                 out.append(Finding("error", f"[{prof.id}] missing {ctx.project.rel(prof.root / rel)}{hint}"))
@@ -427,6 +529,13 @@ def profile_command(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 def _feature_scenarios(ctx: GateContext, d: str) -> tuple[list[gherkin.FeatureFile], list[gherkin.Scenario]]:
     files = gherkin.parse_dir(ctx.path(d))
     return files, [s for f in files for s in f.scenarios]
+
+
+# 0.6.3: GHERKIN-UI-ENTRY heuristic - word-boundary, case-insensitive verb matching on step text.
+GHERKIN_ACTION_VERBS_RE = re.compile(
+    r"\b(sends|selects|submits|deletes|clicks|edits|creates|posts|updates|removes)\b", re.IGNORECASE
+)
+GHERKIN_ENTRY_VERBS_RE = re.compile(r"\b(opens|navigates|views|visits|loads)\b", re.IGNORECASE)
 
 
 @check("gherkin.valid")
@@ -479,6 +588,38 @@ def ac_covered(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
                 tagged.setdefault(t[1:], []).append(s.name)
     out = [Finding("error", f"{ac} has no scenario tagged @{ac}") for ac in acs if ac not in tagged]
     out += [Finding("warn", f"@{ac} is used in scenarios but not listed in trace.yaml") for ac in tagged if ac not in acs]
+    return out
+
+
+@check("gherkin.ui_entry")
+def ui_entry_check(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
+    """0.6.3: heuristic, not a parser. A @ui scenario with no Background is flagged if an action
+    verb step (sends/selects/submits/...) appears before any entry verb step (opens/navigates/...),
+    or with no entry step at all - it may be acting on a page it never opened. A Background is
+    assumed to supply entry steps for every scenario in the file; we deliberately don't parse its
+    step text (conservative: this only ever avoids a warning, never adds one). False negatives are
+    expected; false positives should be rare."""
+    files, _ = _feature_scenarios(ctx, w["dir"])
+    out = []
+    for f in files:
+        if f.has_background:
+            continue
+        for s in f.scenarios:
+            if "@ui" not in s.tags:
+                continue
+            entry_seen = False
+            for step in s.step_lines:
+                if GHERKIN_ACTION_VERBS_RE.search(step) and not entry_seen:
+                    excerpt = step if len(step) <= 60 else step[:57] + "..."
+                    out.append(Finding(
+                        "warn",
+                        f"{ctx.project.rel(s.file)}:{s.line}: {s.name!r} looks like it acts on a page "
+                        f"({excerpt!r}) without first opening/navigating to it; verify it does not depend "
+                        f"on another scenario's navigation (each scenario runs from a fresh state)",
+                    ))
+                    break
+                if GHERKIN_ENTRY_VERBS_RE.search(step):
+                    entry_seen = True
     return out
 
 
@@ -586,6 +727,8 @@ def vacuous_steps(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             for i in res.steps:
                 label = f"step {i.step!r} " if i.step else ""
                 out.append(Finding("error", f"{rel}:{i.line} {label}({i.name}): {i.reason}. Make it set up state or assert behaviour through the public interface; a deliberate no-op needs `# ekit: allow-empty-step <reason>`"))
+            for i in res.fault_steps:
+                out.append(Finding("warn", f"{rel}:{i.line} ({i.name}): {i.reason}"))
             for line, p in res.abs_paths:
                 out.append(Finding("error", f"{rel}:{line} absolute feature path {p!r} breaks on every other machine and in CI: build it from Path(__file__)"))
     return out
@@ -1015,9 +1158,10 @@ def red_committed(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     if not ledger.is_file():
         return []  # ledger.red_first reports it
     root = ctx.project.root
-    if git(root, "rev-parse", "--is-inside-work-tree") != "true":
-        return [Finding("warn", "not a git repository: the red evidence (feature files, tests, ledger) cannot be "
-                                "verified as committed; run `git init` and commit")]
+    state = git_state(root)
+    if state != "ok":
+        return [Finding("warn", git_problem(root, state, "the red evidence (feature files, tests, ledger) cannot be "
+                                                          "verified as committed"))]
     reds = [e for e in ((load_yaml(ledger) or {}).get("entries") or []) if e.get("phase") in ("red", "rebase")]
     fp = (reds[-1].get("fingerprints") if reds else None) or {}
     missing = [rel for rel, sha in sorted(fp.items()) if not _committed_with(root, rel, sha)]
@@ -1087,13 +1231,43 @@ def version_matches(actual: str, pin: str) -> bool:
     return bool(pin) and act_parts[: len(pin_parts)] == pin_parts
 
 
+def read_pin(path: Path) -> tuple[str, str | None]:
+    """(text, problem) for a runtime pin file (.python-version, .nvmrc, ...). `problem` names a non-plain
+    encoding: 'UTF-16' (PowerShell 5.1 `echo 3.12 > .python-version`) or 'UTF-8 with BOM' (`Out-File`,
+    `Set-Content`); None for plain ASCII/UTF-8. The text is decoded either way."""
+    raw = path.read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace").strip(), "UTF-16"
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw[3:].decode("utf-8", errors="replace").strip(), "UTF-8 with BOM"
+    if b"\x00" in raw:   # UTF-16 without a BOM
+        return raw.decode("utf-16-le", errors="replace").strip(), "UTF-16"
+    return raw.decode("utf-8", errors="replace").strip(), None
+
+
+def _show_pin(text: str) -> str:
+    """The pin as typed when it looks like a version; repr() of anything odd (stray bytes, empty, spaces)."""
+    return text if re.fullmatch(r"[\w.\-]+", text) else repr(text)
+
+
+def pin_version_hint(text: str) -> str:
+    return text if re.fullmatch(r"\d+(\.\d+){0,2}", text) else "3.12"
+
+
 @check("profile.environment")
 def profile_environment(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     out: list[Finding] = []
     root = ctx.project.root
-    in_git = git(root, "rev-parse", "--is-inside-work-tree") == "true"
+    state = git_state(root)
+    in_git = state == "ok"
     if not in_git:
-        out.append(Finding("warn", "not a git repository: cannot verify that environment folders are ignored/untracked"))
+        if ctx.project.is_brownfield:   # 0.6.0: red/green evidence is commits; without git the pipeline cannot run
+            out.append(Finding("error", git_problem(root, state, "the red/green evidence needs commits, and "
+                                                                 "environment folders cannot be verified as "
+                                                                 "ignored/untracked")))
+        else:
+            out.append(Finding("warn", git_problem(root, state, "cannot verify that environment folders are "
+                                                                "ignored/untracked")))
     checked = 0
     for prof in _active(ctx):
         env = prof.data.get("environment")
@@ -1103,7 +1277,14 @@ def profile_environment(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
         tag = f"[{prof.id}]"
         pin = prof.root / env["pin_file"] if env.get("pin_file") else None
         if pin is not None and not pin.is_file():
-            out.append(Finding("error", f"{tag} runtime version not pinned: missing {ctx.project.rel(pin)}"))
+            out.append(Finding("error", f"{tag} runtime version not pinned: missing {ctx.project.rel(pin)} (a one-line file, e.g. \"3.12\")"))
+        wanted, pin_problem = ("", None)
+        if pin is not None and pin.is_file():
+            wanted, pin_problem = read_pin(pin)
+            if pin_problem:
+                fix = (f"rewrite it with `uv python pin {pin_version_hint(wanted)}`" if env.get("kind") == "python-venv"
+                       else "rewrite it as plain UTF-8 text without a BOM")
+                out.append(Finding("error", f"{tag} {ctx.project.rel(pin)} is {pin_problem} (PowerShell redirect?); {fix}"))
         env_dir = prof.root / env["dir"] if env.get("dir") else None
         if env_dir is None:
             continue
@@ -1127,9 +1308,8 @@ def profile_environment(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
             continue
         if env.get("kind") == "python-venv" and pin is not None and pin.is_file():
             actual = venv_python_version(env_dir)
-            wanted = pin.read_text(encoding="utf-8").strip()
             if actual and not version_matches(actual, wanted):
-                out.append(Finding("error", f"{tag} {rel} uses Python {actual} but {ctx.project.rel(pin)} pins {wanted}; delete {rel} and run `ekit run install`"))
+                out.append(Finding("error", f"{tag} {rel} uses Python {actual} but {ctx.project.rel(pin)} pins {_show_pin(wanted)}; delete {rel} and run `ekit run install`"))
     if checked == 0:
         out.append(Finding("info", "no profile declares an environment"))
     return out
@@ -1150,8 +1330,12 @@ def constitution_intact(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
     if state == "intact":
         return []
     if state == "changed":
-        return [Finding("error", f"{constitution.MEMORY}: {d}. Restore I–VIII from "
-                                 f"{ctx.project.rel(constitution.template_path(ctx.project))}; changing them needs an ADR "
+        tpl = ctx.project.rel(constitution.template_path(ctx.project))
+        if ctx.project.is_brownfield:
+            return [Finding("error", f"{constitution.MEMORY}: {d}. Restore I–IV from {tpl} (changing them needs an ADR "
+                                     "and a new kit version). To adopt your team's own principles V–VIII, a person "
+                                     "runs `ekit constitution lock`") for d in details]
+        return [Finding("error", f"{constitution.MEMORY}: {d}. Restore I–VIII from {tpl}; changing them needs an ADR "
                                  "and a new kit version. Project principles go in IX and above") for d in details]
     return [Finding("warn", f"{constitution.MEMORY}: {d}") for d in details]
 
@@ -1254,3 +1438,8 @@ def no_exemplar(ctx: GateContext, w: dict[str, Any]) -> list[Finding]:
 
 from . import redchecks  # noqa: E402,F401
 from . import changechecks  # noqa: E402,F401
+
+
+# 0.7.0: design stage and smoke gate. Imported last: these modules register their checks with @check above.
+from . import design as _design_checks  # noqa: E402,F401
+from . import smoke as _smoke_checks  # noqa: E402,F401

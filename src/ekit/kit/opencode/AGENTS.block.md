@@ -9,6 +9,8 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 
 | Step | Command | Gate |
 |------|---------|------|
+| Design (happy-path lane) | `/speckit.esdlc.design` | `ekit gate design` |
+| W0 slice (happy-path lane) | `/speckit.esdlc.slice S0` | `ekit gate smoke` |
 | Landing zone (once) | `/speckit.esdlc.baseline` | `ekit gate baseline` |
 | BRD → PRD + questions | `/speckit.esdlc.brd <brd file>` | `ekit gate intake --prd docs/requirements/<slug>` |
 | Bug / change from the prompt | `/speckit.esdlc.change <request text>` | `ekit gate intake --prd CR-NNNN` |
@@ -23,6 +25,7 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 ## Non-negotiables
 
 - Never invent business facts. Unknowns go to `docs/requirements/<slug>/open-questions.yaml`.
+- Work inside the repository root only. Never list, search or read folders outside it (home directory, other projects, old kit copies). Everything about the kit is in `ekit context`, `ekit <command> --help` and `.ekit/kit/`. If a command fails and you do not understand why, stop and tell the user; do not go looking elsewhere.
 - A bug fix or change asked for in chat is never coded directly: it becomes a change request with
   `/speckit.esdlc.change` and goes through the same red → green cycle. For a **bug**, red reproduces it against the
   committed code with tests only (no stubs, no production edits; `RED-BUG-REPRODUCED`).
@@ -47,8 +50,8 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
 - Which feature to work on is decided by `ekit feature current --for red|implement "<what the user said>"`, never by
   you: use the folder it prints; if it fails, show its message and stop.
 - ADRs: `ekit adr new "Title"` (takes the next free number). Never number an ADR by hand.
-- Never run `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit models …` or
-  `ekit baseline unfreeze|accept|install` or `ekit change retire`: they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
+- Never run `ekit unfreeze`, `ekit fix-red`, `ekit upgrade`, `ekit wave approve|advance|decline`, `ekit design approve`, `ekit models …` or
+  `ekit baseline unfreeze|accept|install|enforce`, `ekit constitution lock` or `ekit change retire`: they record a person's decision. Tell the user the exact command instead. (`opencode.json` denies them to your
   shell tool.)
   While a feature is unfrozen, its production source directories are usually also denied to your edit tool until
   it's re-frozen — that's by design (see the previous bullet), not a bug to work around.
@@ -57,6 +60,9 @@ fails, fix the artifact and re-run; never skip, bypass or edit the policy.
   Your tool calls and `ekit` runs are logged (`ekit log tail`); that log is read by reviewers.
 - Waves (if `ekit wave status --brief` says `on`): work only on acceptance criteria of the current wave
   (`ekit wave scope FEAT-xx`). An NFR may be `Deferred (Wn)` in a conformance table only if the approved plan defers it.
+- Happy-path lane (`ekit design status` says `lane: happy-path`): design first (`docs/design/design.yaml` is binding), then
+  build slice by slice in wave W0 with rigor `skeleton` (no spec/red/freeze; journeys under `tests/acceptance/journeys/`
+  are the proof, `ekit gate smoke`). Gates name the rigor level and the checks it skips.
 - If a command starts with an **ekit model routing** note, begin your first reply with the line it gives.
 
 ## Stack: {stack}

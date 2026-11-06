@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,7 +30,7 @@ def _interactive(args: argparse.Namespace) -> bool:
 def cmd_init(args: argparse.Namespace) -> int:
     installer.init(args.target, stack=args.stack, source=args.source, integration=args.integration,
                    force=args.force, interactive=_interactive(args), extra_specify=args.specify_arg or [],
-                   baseline=args.baseline, name=args.name)
+                   baseline=args.baseline, name=args.name, lane=getattr(args, "lane", None))
     return 0
 
 
@@ -131,7 +132,7 @@ def require_pinned_cli(project: Project) -> None:
 def cmd_gate(args: argparse.Namespace) -> int:
     project = Project.load()
     require_pinned_cli(project)
-    ids = gates.gate_ids(project) if args.gate == "all" else [args.gate]
+    ids = gates.default_gate_ids(project) if args.gate == "all" else [args.gate]
     overall = 0
     for gid in ids:
         res, notes = gates.run_gate(project, gid, feature=args.feature, prd=args.prd)
@@ -173,6 +174,7 @@ def cmd_context(args: argparse.Namespace) -> int:
             controls.setdefault(nid, []).append(f"[{prof.id}] {how}")
     data = {
         "stack": project.stack_id,
+        "mode": "brownfield" if project.is_brownfield else "greenfield",   # 0.6.0
         "description": project.stack.get("description"),
         "kit_version": project.kit.version,
         "profiles": [
@@ -205,6 +207,7 @@ def cmd_template(args: argparse.Namespace) -> int:
             sys.stdout.write(proc.stdout)
             return 0
     for cand in (project.kit.component("extension") / "templates" / f"{args.name}.md",
+                 project.kit.component("extension") / "templates" / f"{args.name}.yaml",
                  project.kit.component("preset") / "templates" / f"{args.name}.md"):
         if cand.is_file():
             sys.stdout.write(cand.read_text(encoding="utf-8"))
@@ -247,6 +250,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     plan = project.wave_plan
     print(f"Waves: {waves.project_mode(project.root)}" + (f", current {plan.current} of {', '.join(plan.ids)}" if plan else "")
           + (f"; inactive: {', '.join(p.id for p in project.inactive_profiles)}" if plan and project.inactive_profiles else ""))
+    from . import design as design_mod, rigor
+    if design_mod.lane(project) == "happy-path":
+        rec = design_mod.approval(project.root)
+        state = ("not approved" if not rec else "STALE" if rec.get("fingerprint") != design_mod.fingerprint(project.root)
+                 else f"approved by {rec.get('by')}")
+        print(f"Lane: happy-path; rigor {rigor.level(project) or 'not set'}; design {state}")
     rts, _ = models.routes(project.root, project.kit)
     if rts:
         tiers = ((models.load_config(project.root) or {}).get("tiers") or {})
@@ -492,6 +501,56 @@ def cmd_wave(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_design(args: argparse.Namespace) -> int:
+    """0.7.0: the design stage. init [--from-code] | approve --by (a person) | status."""
+    from . import design, rigor
+    project = Project.load()
+    a = args.action
+    if a == "init":
+        for n in design.init(project, from_code=args.from_code, force=args.force):
+            print(n)
+        return 0
+    if a == "approve":
+        for n in design.approve(project, args.by or ""):
+            print(n)
+        return 0
+    plan = project.wave_plan
+    print(f"lane: {design.lane(project)}")
+    if plan is not None:
+        print(f"wave: {plan.current} (rigor {rigor.level(project) or 'not set'})")
+    for rel in (design.ARCHITECTURE, design.DESIGN_YAML):
+        print(f"  {rel}: {'present' if (project.root / rel).is_file() else 'missing'}")
+    rec = design.approval(project.root)
+    if not rec:
+        print("  approval: none (`ekit design approve --by \"Name\"`, a person)")
+    elif rec.get("fingerprint") != design.fingerprint(project.root):
+        print(f"  approval: STALE (approved by {rec.get('by')} on {rec.get('on')}, then edited)")
+    else:
+        print(f"  approval: {rec.get('by')} on {rec.get('on')}")
+    return 0
+
+
+def cmd_trace(args: argparse.Namespace) -> int:
+    """0.7.0: traceability. matrix [--format md|csv|json] | postman."""
+    from . import smoke, trace
+    root = find_project_root()
+    if args.action == "matrix":
+        text = trace.render(trace.matrix(root, args.journeys or smoke.JOURNEYS), args.format)
+    else:
+        coll = trace.postman(root, args.openapi or smoke.OPENAPI, args.journeys or smoke.JOURNEYS, args.base_url)
+        text = json.dumps(coll, indent=2)
+        if not args.out:
+            args.out = "reports/postman_collection.json"
+    if args.out:
+        out = Path(args.out) if Path(args.out).is_absolute() else root / args.out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n", encoding="utf-8")
+        print(f"wrote {out.relative_to(root).as_posix() if out.is_relative_to(root) else out}")
+    else:
+        print(text)
+    return 0
+
+
 def cmd_models(args: argparse.Namespace) -> int:
     from . import models
     project = Project.load()
@@ -561,16 +620,37 @@ def cmd_constitution(args: argparse.Namespace) -> int:
     if args.action == "ratify":
         notes = constitution.ratify(project, name=args.name)
         print("\n".join(notes) if notes else f"{constitution.MEMORY} is already ratified; nothing to fill.")
+    if args.action == "lock":
+        print("\n".join(constitution.lock(project)))
     state, details = constitution.principles_drift(project)
     print(f"principles I-VIII: {state}" + "".join(f"\n  - {d}" for d in details))
     return 1 if state == "changed" else 0
 
 
+def _print_enforced(project: Project) -> None:
+    from . import ratchet
+    rows = ratchet.load(project.root)
+    if not rows:
+        print("Enforced NFRs (ratchet): none" + (" (brownfield: platform NFRs are inherited as-is until a person runs "
+                                                 "`ekit baseline enforce`)" if project.is_brownfield else ""))
+        return
+    print(f"Enforced NFRs (ratchet, {ratchet.ENFORCED}):")
+    for e in rows:
+        print(f"  {e['id']:<8} by {e.get('by')} at {str(e.get('at'))[:10]}: {e.get('reason')}")
+
+
 def cmd_baseline(args: argparse.Namespace) -> int:
-    from . import freeze, golden, landing
+    from . import freeze, golden, landing, ratchet
     project = Project.load()
     root = project.root
     a = args.action
+    if a == "enforce":
+        for m in ratchet.enforce(project, list(args.ids or []), args.reason or ""):
+            print(m)
+        if not project.is_brownfield:
+            print("Greenfield project: every platform NFR is already required; the ratchet only changes brownfield gates.")
+        print(f"Recorded in {ratchet.ENFORCED}; commit it. There is no un-enforce command (removal is a hand edit with an ADR).")
+        return 0
     if a == "install":
         if golden.is_golden(project) and golden.read_lock(root):
             raise EkitError("The golden landing zone is already installed.")
@@ -587,6 +667,8 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         mode = ((project.config or {}).get("baseline") or {}).get("mode") or "generate"
         print(f"Landing zone: {mode} (no golden core). `ekit gate baseline` judges it; "
               f"{landing.status(project)[0]}.")
+        if a == "status":
+            _print_enforced(project)
         return 0 if a in ("status", "drift") else 2
     if a == "unfreeze":
         freeze.unfreeze_baseline(root, args.reason or "")
@@ -616,6 +698,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         g = golden.for_project(project)
         if g is not None:
             print(f"  seams: " + "; ".join(f"{k}: {v}" for k, v in g.seams.items()))
+        _print_enforced(project)
     for d in found:
         print(f"  {d.kind:<8} {d.rel}")
     if a == "drift" and not found:
@@ -626,11 +709,16 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 def cmd_feature(args: argparse.Namespace) -> int:
     from . import features, golden
     project = Project.load()
+    if args.action == "package" and re.match(r"^FEAT-\d{2}$", (args.name or "").strip()):     # 0.7.1: design.yaml feature
+        pkg = golden.design_feature_package(project, args.name.strip())
+        print(pkg or "no package convention (not a golden landing zone): put code where plan.md says")
+        return 0
     if args.action == "package":
         feature = features.current(project, args.name, phase="any")
         pkgs = golden.feature_packages(project, feature)
         if not pkgs:
-            raise EkitError("Feature packages are a golden landing zone convention; this project has none.")
+            print("no package convention (not a golden landing zone): put code where plan.md says")   # 0.6.1
+            return 0
         print("\n".join(pkgs))   # 0.5.0: a bug fix or enhancement prints the affected feature's package(s)
         return 0
     print(features.current(project, args.name, phase=args.phase))
@@ -706,7 +794,7 @@ def cmd_change(args: argparse.Namespace) -> int:
 def cmd_adr(args: argparse.Namespace) -> int:
     from . import features
     project = Project.load()
-    print(project.rel(features.new_adr(project.root, " ".join(args.title))))
+    print(project.rel(features.new_adr(project.root, " ".join(args.title), args.decision)))
     return 0
 
 
@@ -741,6 +829,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("target", help="project directory name, or . for the current directory")
     add_init_opts(sp)
     sp.set_defaults(fn=cmd_init)
+
+    sp_init = sp
+    sp_init.add_argument("--lane", choices=["happy-path", "classic"],
+                         help="0.7.0: happy-path (default for a new golden project: design, then W0 slices proved by journeys) "
+                              "or classic (the 0.6.4 flow)")
 
     sp = sub.add_parser("adopt", help="existing repository: same as `init .`, brownfield aware")
     add_init_opts(sp)
@@ -777,7 +870,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--source")
     sp.set_defaults(fn=cmd_stacks)
 
-    sp = sub.add_parser("gate", help="run a gate: intake | ready | spec | scenarios | plan | baseline | red | red-recorded | green | all")
+    sp = sub.add_parser("gate", help="run a gate: intake | ready | design | smoke | spec | scenarios | plan | baseline | red | red-recorded | green | all")
     sp.add_argument("gate")
     sp.add_argument("--feature", help="feature dir name under specs/ (default: branch / SPECIFY_FEATURE)")
     sp.add_argument("--prd", help="docs/requirements/<slug>")
@@ -824,6 +917,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="init: overwrite an existing proposal")
     sp.set_defaults(fn=cmd_wave)
 
+    sp = sub.add_parser("design", help="design stage (0.7.0): init [--from-code] | approve --by (a person) | status")
+    sp.add_argument("action", nargs="?", default="status", choices=["init", "approve", "status"])
+    sp.add_argument("--from-code", action="store_true", help="init: draft design.yaml from existing Protocol classes, the PRD and reports/openapi.json")
+    sp.add_argument("--by", help="approve: the person approving (recorded)")
+    sp.add_argument("--force", action="store_true", help="init: overwrite existing design files")
+    sp.set_defaults(fn=cmd_design)
+
+    sp = sub.add_parser("trace", help="traceability (0.7.0): matrix [--format md|csv|json] | postman")
+    sp.add_argument("action", choices=["matrix", "postman"])
+    sp.add_argument("--format", choices=["md", "csv", "json"], default="md", help="matrix: output format")
+    sp.add_argument("--journeys", help="journey report (default reports/journeys.json)")
+    sp.add_argument("--openapi", help="postman: OpenAPI JSON (default reports/openapi.json)")
+    sp.add_argument("--base-url", default="http://localhost:8000", help="postman: value of the baseUrl variable")
+    sp.add_argument("--out", help="write to this file (postman default: reports/postman_collection.json)")
+    sp.set_defaults(fn=cmd_trace)
+
     sp = sub.add_parser("models", help="optional model routing by tier: show | setup | off")
     sp.add_argument("action", nargs="?", default="show", choices=["show", "setup", "off"])
     sp.add_argument("--flagship", help="model id for the flagship tier, e.g. anthropic/claude-opus-x")
@@ -833,15 +942,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--non-interactive", action="store_true", help="never prompt")
     sp.set_defaults(fn=cmd_models)
 
-    sp = sub.add_parser("constitution", help="ratify (fill placeholders deterministically) | check principles I-VIII")
-    sp.add_argument("action", choices=["ratify", "check"])
+    sp = sub.add_parser("constitution", help="ratify (fill placeholders deterministically) | check principles I-VIII | "
+                                             "lock (a person, brownfield: adopt the team's V-VIII)")
+    sp.add_argument("action", choices=["ratify", "check", "lock"])
     sp.add_argument("--name", help="project name (default: folder name)")
     sp.set_defaults(fn=cmd_constitution)
 
-    sp = sub.add_parser("baseline", help="golden landing zone: status | drift | freeze | unfreeze | accept | install")
+    sp = sub.add_parser("baseline", help="golden landing zone: status | drift | freeze | unfreeze | accept | install; "
+                                          "enforce NFR-ID... (a person, brownfield ratchet)")
     sp.add_argument("action", nargs="?", default="status",
-                    choices=["status", "drift", "freeze", "unfreeze", "accept", "install"])
-    sp.add_argument("--reason", help="unfreeze / accept: why the core changes (recorded)")
+                    choices=["status", "drift", "freeze", "unfreeze", "accept", "install", "enforce"])
+    sp.add_argument("ids", nargs="*", help="enforce: platform-scope NFR ids, e.g. SEC-01 LOG-01")
+    sp.add_argument("--reason", help="unfreeze / accept / enforce: why (recorded)")
     sp.add_argument("--name", help="install: project name (default: folder name)")
     sp.set_defaults(fn=cmd_baseline)
 
@@ -871,6 +983,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("adr", help='new "Title": create docs/adr/NNNN-title.md with the next free number')
     sp.add_argument("action", choices=["new"])
     sp.add_argument("title", nargs="+")
+    sp.add_argument("--decision", help="the design.yaml decision id this ADR records (e.g. D1); written into the ADR")
     sp.set_defaults(fn=cmd_adr)
 
     sp = sub.add_parser("blocked", help="agent: stop and record why a frozen test or scenario cannot be satisfied")

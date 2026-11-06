@@ -21,6 +21,7 @@ layout:
     - src/main/resources/static/index.html
     - src/main/resources/static/js/api.js
     - src/main/resources/static/css/app.css
+  pipeline_paths: []   # 0.6.0: no test layout of its own; tested by the backend
 
 commands: {}   # tested and built by backend/springboot (same root)
 

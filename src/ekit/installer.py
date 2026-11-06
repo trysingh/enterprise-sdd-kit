@@ -25,6 +25,9 @@ def say(msg: str) -> None:
     print(msg, flush=True)
 
 
+WARNINGS: list[str] = []      # 0.7.1: "!!" notes of this run (e.g. `uv lock` failed); `next_steps` ends with "Done with warnings"
+
+
 # --------------------------------------------------------------------------- specify CLI
 def specify_argv() -> list[str]:
     override = os.environ.get("EKIT_SPECIFY")
@@ -255,6 +258,25 @@ def choose_baseline(given: str | None, kit: kitsource.Kit, stack: str, mode: str
     )
 
 
+def choose_lane(given: str | None, mode: str, baseline_mode: str) -> str:
+    """0.7.0: greenfield golden projects default to the happy-path lane; `--lane classic` keeps 0.6.4 behaviour."""
+    if given is not None and given not in ("happy-path", "classic"):
+        raise EkitError("--lane must be 'happy-path' or 'classic'.")
+    if given == "happy-path" and mode == "brownfield":
+        raise EkitError("--lane happy-path is for new (greenfield) projects; an adopted repository starts at standard rigor "
+                        "(use `ekit design init --from-code`).")
+    if given:
+        return given
+    return "happy-path" if mode == "greenfield" and baseline_mode == "golden" else "classic"
+
+
+def set_lane(root: Path, lane: str) -> None:
+    path = root / EKIT_DIR / PROJECT_FILE
+    data = (load_yaml(path) if path.is_file() else {}) or {}
+    data["lane"] = lane
+    dump_yaml(data, path)
+
+
 def write_project_file(root: Path, stack: str, mode: str, integration: str) -> None:
     path = root / EKIT_DIR / PROJECT_FILE
     data = load_yaml(path) if path.is_file() else {}
@@ -273,7 +295,7 @@ def write_project_file(root: Path, stack: str, mode: str, integration: str) -> N
 # --------------------------------------------------------------------------- commands
 def init(target: str, *, stack: str | None, source: str | None, integration: str,
          force: bool, interactive: bool, extra_specify: list[str],
-         baseline: str | None = None, name: str | None = None) -> Path:
+         baseline: str | None = None, name: str | None = None, lane: str | None = None) -> Path:
     here = target in (".", "")
     root = Path.cwd() if here else Path(target).resolve()
     src = kitsource.resolve(choose_source(source, interactive))
@@ -287,6 +309,7 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
         )
         mode = "brownfield" if has_code else "greenfield"
         baseline_mode = choose_baseline(baseline, kitsource.Kit.load(src.kit_path), stack, mode, interactive)
+        lane = choose_lane(lane, mode, baseline_mode)
         say(f"\n==> Spec Kit ({mode})")
         script_flag = ["--script", "py"]           # Python scripts: identical on Windows and POSIX
         ni = [] if interactive else ["--non-interactive"]
@@ -299,6 +322,7 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
         else:
             run_specify(["init", str(root), "--integration", integration, *script_flag, *ni, *extra_specify],
                         root.parent)
+        root.mkdir(parents=True, exist_ok=True)          # 0.7.2: a missing target is created (the integration install runs inside it)
         if integration not in installed_integrations(root):
             run_specify(["integration", "install", integration, *script_flag], root)
 
@@ -307,6 +331,7 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
         say(f"  kit {lock['kit']['version']} from {kitsource.source_string(lock)} -> .ekit/kit (sha256 {lock['sha256'][:12]}…)")
         write_project_file(root, stack, mode, integration)
         set_baseline_mode(root, baseline_mode)
+        set_lane(root, lane)
     finally:
         src.cleanup()
 
@@ -316,12 +341,44 @@ def init(target: str, *, stack: str | None, source: str | None, integration: str
     if baseline_mode == "golden":
         say("\n==> Golden landing zone")
         install_golden(project, name=name)
+    if lane == "happy-path":
+        from . import waves
+        waves.write_happy_path_plan(root)
+        say("\n==> Happy-path lane: waves on, W0 (rigor skeleton) then W1 (standard); see `ekit design status`")
     say("\n==> OpenCode rules and agents")
-    install_opencode_assets(project)
-    scaffold(project)
-    apply_edit_protection(project)
-    next_steps(project)
+    install_opencode_assets(Project.load(root))
+    scaffold(Project.load(root))
+    apply_edit_protection(Project.load(root))
+    git_bootstrap(root)
+    next_steps(Project.load(root))
     return root
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def git_bootstrap(root: Path) -> str:
+    """0.7.2: `git init` + one initial commit of the generated tree when the target is not in a git repo yet.
+    Without git: a message. Inside an existing repo: never commit into its history, print the command instead."""
+    cmd = 'git add -A && git commit -m "chore: ekit init"'
+    if shutil.which("git") is None:
+        say("\n==> git not found: skipped `git init` and the initial commit. Install git, then in the project: git init && " + cmd)
+        return "skipped"
+    if _git(root, "rev-parse", "--git-dir").returncode == 0:
+        say(f"\n==> {root} is already in a git repository; nothing committed. Review, then: {cmd}")
+        return "existing"
+    say("\n==> git: init + initial commit")
+    if _git(root, "init").returncode != 0:
+        say("  !! `git init` failed; run it yourself, then: " + cmd)
+        return "failed"
+    r = _git(root, "add", "-A")
+    r = r if r.returncode else _git(root, "commit", "-m", "chore: ekit init")
+    if r.returncode != 0:
+        say(f"  !! initial commit failed ({(r.stderr or r.stdout).strip().splitlines()[-1:] or ['?']}); set git user.name/user.email, then: {cmd}")
+        return "init-only"
+    say("  committed the generated tree: chore: ekit init")
+    return "committed"
 
 
 def set_baseline_mode(root: Path, mode: str, version: str | None = None) -> None:
@@ -334,7 +391,11 @@ def set_baseline_mode(root: Path, mode: str, version: str | None = None) -> None
 def install_golden(project: Project, *, name: str | None = None, run_post: bool = True) -> None:
     """Copy the golden tree, fingerprint it, ratify the constitution deterministically, freeze the core."""
     from . import constitution, freeze, golden
-    lock = golden.install(project, project_name=name, run_post=run_post, say=say)
+    def keep(msg: str) -> None:
+        if msg.strip().startswith("!!"):
+            WARNINGS.append(msg.strip().lstrip("!").strip())
+        say(msg)
+    lock = golden.install(project, project_name=name, run_post=run_post, say=keep)
     set_baseline_mode(project.root, "golden", lock["version"])
     project = Project.load(project.root)
     for note in constitution.ratify(project, name=lock["project_name"]):
@@ -420,9 +481,14 @@ def upgrade(root: Path, source: str | None) -> None:
 
 def next_steps(project: Project) -> None:
     from . import golden
+    warned = list(WARNINGS)
+    WARNINGS.clear()
     if golden.is_golden(project):
+        if warned:
+            say("\nDone with warnings:\n" + "\n".join(f"  ! {w}" for w in warned) +
+                "\nNext step: fix the cause (network / uv), run `uv lock`, then continue below. The project files are all in place.")
         say(f"""
-Done. Stack: {project.stack_id} ({', '.join(p.id for p in project.profiles)}), golden landing zone installed.
+{"Stack" if warned else "Done. Stack"}: {project.stack_id} ({', '.join(p.id for p in project.profiles)}), golden landing zone installed.
 The constitution is ratified (principles I-VIII from the kit; add project principles IX+ with
 /speckit.constitution) and the golden core is frozen against agent edits.
 
@@ -430,11 +496,18 @@ Next, in a terminal in {project.root}:
   ekit run install && ekit gate baseline     # creates .venv from uv.lock, records the landing zone
   git add -A && git commit -m "chore: golden landing zone"
 Then inside `opencode`:
-  1. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions
+""" + ("""  1. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions + happy-path.md
+  2. /speckit.esdlc.questions       resolve blocking questions (or `ekit questions export`)
+  3. /speckit.esdlc.design          architecture.md + design.yaml; a person runs `ekit design approve --by`
+  4. /speckit.esdlc.slice S0        the happy path: every key feature, proved by journeys (`ekit gate smoke`)
+  5. a person runs `ekit wave advance --by` (adoption point), then /speckit.esdlc.change or /speckit.specify
+     for everything after (standard rigor: spec, Gherkin, plan, red, green)
+
+Lane: happy-path (`ekit init --lane classic` keeps the 0.6.4 flow). `ekit design status` shows where you are.""" if project.config.get("lane") == "happy-path" else """  1. /speckit.esdlc.brd <brd file>  BRD -> PRD + open questions
      (or /speckit.esdlc.change <request>  a bug fix / change typed in chat -> CR-NNNN)
   2. /speckit.esdlc.questions       resolve blocking questions (or `ekit questions export`)
   3. /speckit.specify FEAT-01 -> /speckit.esdlc.gherkin -> /speckit.plan -> /speckit.tasks
-     -> /speckit.esdlc.red -> /speckit.implement
+     -> /speckit.esdlc.red -> /speckit.implement""") + """
 
 `ekit baseline status` shows the golden core; `ekit status` the pipeline.""")
         return

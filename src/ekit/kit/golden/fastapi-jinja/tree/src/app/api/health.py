@@ -11,12 +11,12 @@ from app.core.db import get_engine
 router = APIRouter(prefix="/health", tags=["health"])
 
 
-@router.get("/live")
+@router.get("/live", operation_id="health_live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/ready")
+@router.get("/ready", operation_id="health_ready")
 def ready() -> JSONResponse:
     try:
         with get_engine().connect() as conn:

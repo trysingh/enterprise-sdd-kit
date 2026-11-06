@@ -205,6 +205,9 @@ def validate(plan: WavePlan, kit: Any, catalog_ids: set[str]) -> tuple[list[str]
         for ac in prd["acs"]:
             if f"{slug}:{ac}" not in assign:
                 errors.append(f"{slug}:{ac} is not in any wave (new or changed requirement? place it in a wave)")
+    if any("is not in any wave" in e for e in errors) and plan.ids[:2] == ["W0", "W1"]:
+        errors.append("happy-path lane: W0 scope is placed when `ekit design approve --by` runs (from the design.yaml slices); "
+                      "the other ACs are proposed for W1 in docs/planning/waves.proposed.yaml, then a person runs `ekit wave approve --by`")
     last_with_scope = max((i for i, w in enumerate(plan.waves) if w.get("scope")), default=-1)
     for i, w in enumerate(plan.waves):
         if not w.get("scope"):
@@ -212,6 +215,11 @@ def validate(plan: WavePlan, kit: Any, catalog_ids: set[str]) -> tuple[list[str]
                 warnings.append(f"wave {w.get('id')} has no scope yet (a placeholder; it cannot become current while empty)")
             else:
                 errors.append(f"wave {w.get('id')} has no scope")
+        if w.get("rigor") is not None:
+            from . import rigor as rigor_mod
+            known = rigor_mod.levels(kit)
+            if known and str(w.get("rigor")) not in known:
+                errors.append(f"wave {w.get('id')}: rigor '{w.get('rigor')}' is not one of {', '.join(known)} (policy/rigor.policy.yaml)")
         roles = w.get("profiles")
         if roles is not None and (not isinstance(roles, list) or not set(map(str, roles)) <= {"backend", "frontend"}):
             errors.append(f"wave {w.get('id')}: profiles must be a list of backend / frontend")
@@ -307,21 +315,58 @@ def init_proposal(root: Path, force: bool = False) -> Path:
     scope = [f"{slug}:{feat}" for slug, prd in index.items() for feat in prd["features"]]
     loose = [f"{slug}:{ac}" for slug, prd in index.items()
              for ac in prd["acs"] if not any(ac in acs for acs in prd["features"].values())]
-    data = {
-        "apiVersion": "ekit/v1",
-        "kind": "WavePlan",
-        "waves": [
+    if _lane(root) == "happy-path":      # 0.7.0: W0 is the happy path over every key feature, then standard rigor
+        waves_ = [
+            {"id": "W0", "goal": "Happy path: every key feature working together against the Day-0 seams",
+             "rigor": "skeleton", "profiles": ["backend", "frontend"], "scope": scope + loose},
+            {"id": "W1", "goal": "Depth: changes, edge cases and deferred NFRs under standard rigor",
+             "rigor": "standard", "scope": []},
+        ]
+    else:
+        waves_ = [
             {"id": "W1", "goal": "Face of the system: shell, sign-in and one working happy path per major feature",
              "profiles": ["backend", "frontend"], "scope": scope + loose},
             {"id": "W2", "goal": "Deepen by priority: remaining acceptance criteria, edge cases, deferred NFRs",
              "scope": []},
-        ],
+        ]
+    data = {
+        "apiVersion": "ekit/v1",
+        "kind": "WavePlan",
+        "waves": waves_,
         "dependencies": {},
         "defer": [],
     }
     dump_yaml(data, dest)
     _set_project_flag(root, "proposed")
     return dest
+
+
+def _lane(root: Path) -> str:
+    p = root / EKIT_DIR / PROJECT_FILE
+    return str(((load_yaml(p) or {}) if p.is_file() else {}).get("lane") or "classic")
+
+
+def write_happy_path_plan(root: Path, by: str = "ekit init (happy-path lane default)") -> Path:
+    """0.7.0 greenfield default: waves on, W0 (rigor skeleton) then W1 (standard). Scope is placed when the PRD exists."""
+    data = {
+        "apiVersion": "ekit/v1", "kind": "WavePlan",
+        "waves": [
+            {"id": "W0", "goal": "Happy path: every key feature working together against the Day-0 seams",
+             "rigor": "skeleton", "profiles": ["backend", "frontend"], "scope": []},
+            {"id": "W1", "goal": "Depth: changes, edge cases and deferred NFRs under standard rigor",
+             "rigor": "standard", "scope": []},
+        ],
+        "dependencies": {}, "defer": [], "current": "W0",
+        "approved_by": by, "approved_on": _today(),
+        "history": [{"action": "approve", "by": by, "on": _today(), "current": "W0"}],
+    }
+    dump_yaml(data, root / APPROVED)
+    prop = dict(data)
+    for k in ("approved_by", "approved_on", "history", "current"):
+        prop.pop(k, None)
+    dump_yaml(prop, root / PROPOSAL)
+    _set_project_flag(root, "on")
+    return root / APPROVED
 
 
 def decline(root: Path) -> None:
@@ -382,6 +427,8 @@ def approve(root: Path, kit: Any, by: str) -> tuple[WavePlan, list[str]]:
         new = [ac for w in data.get("waves") or [] for ac in w["scope"] if ac not in before_acs]
         if new:
             notes.append(f"newly placed: {', '.join(new)}")
+    if previous and previous.data.get("placed_from_design"):
+        data["placed_from_design"] = previous.data["placed_from_design"]      # 0.7.1: keep the who/when record
     data["approved_by"] = by.strip()
     data["approved_on"] = _today()
     history.append({"action": "approve", "by": by.strip(), "on": _today(), "current": data["current"]})
@@ -391,6 +438,105 @@ def approve(root: Path, kit: Any, by: str) -> tuple[WavePlan, list[str]]:
     dump_yaml(data, root / APPROVED)
     _set_project_flag(root, "on")
     return plan, notes
+
+
+def w0_features(design_data: dict[str, Any]) -> list[str]:
+    """0.7.1: the FEAT- ids of the slices that belong to W0 (a slice is W0 unless it says `wave: <other>`)."""
+    out: list[str] = []
+    for s in design_data.get("slices") or []:
+        if isinstance(s, dict) and str(s.get("wave") or "W0") == "W0":
+            out += [str(f) for f in s.get("features") or [] if str(f) not in out]
+    return out
+
+
+def place_from_design(root: Path, design_data: dict[str, Any], by: str) -> list[str]:
+    """0.7.1: happy-path lane. When a person approves the design, the ACs of the features in the W0 slices are
+    placed in W0 of the approved plan (recorded with who/when); every other unplaced AC is proposed for W1 in
+    `docs/planning/waves.proposed.yaml` (a person still approves that with `ekit wave approve --by`)."""
+    if _lane(root) != "happy-path":
+        return []
+    approved = load_plan(root, APPROVED)
+    if approved is None:
+        return []
+    index = prd_index(root)
+    if not index:
+        return ["no PRD yet: nothing to place in W0"]
+    feats = w0_features(design_data)
+    data = copy.deepcopy(approved.data)
+    w0 = next((w for w in data.get("waves") or [] if str(w.get("id")) == "W0"), None)
+    if w0 is None:
+        return ["no W0 wave in .ekit/waves.yaml: scope not placed"]
+    claimed = set(approved.assignment())
+    scope = [str(x) for x in w0.get("scope") or []]
+    placed: list[str] = []
+    for slug, prd in index.items():
+        for f in feats:
+            for ac in prd["features"].get(f, []):
+                q = f"{slug}:{ac}"
+                if q not in claimed and q not in scope:
+                    scope.append(q)
+                    placed.append(q)
+    notes: list[str] = []
+    if placed:
+        w0["scope"] = scope
+        data["placed_from_design"] = {"by": by.strip(), "on": _today(), "source": "docs/design/design.yaml",
+                                      "features": feats, "acs": sorted(set(placed) | set(
+                                          (approved.data.get("placed_from_design") or {}).get("acs") or []))}
+        data.setdefault("history", []).append({"action": "place-from-design", "by": by.strip(), "on": _today(),
+                                               "wave": "W0", "acs": placed})
+        dump_yaml(data, root / APPROVED)
+        notes.append(f"W0 scope placed from design.yaml ({', '.join(feats)}): {len(placed)} AC(s), recorded in {APPROVED}")
+    # proposal: W0 features + everything else unplaced in W1 (default proposal)
+    prop = load_plan(root, PROPOSAL)
+    pdata = copy.deepcopy(prop.data) if prop else {k: v for k, v in data.items()
+                                                  if k not in ("approved_by", "approved_on", "history", "current", "placed_from_design")}
+    pw = {str(w.get("id")): w for w in pdata.get("waves") or []}
+    if "W0" in pw and "W1" in pw:
+        pw["W0"]["scope"] = list(w0["scope"])
+        taken = set(WavePlan(pdata, index).assignment())
+        rest = [f"{slug}:{ac}" for slug, prd in index.items() for ac in prd["acs"] if f"{slug}:{ac}" not in taken]
+        if rest:
+            pw["W1"]["scope"] = list(pw["W1"].get("scope") or []) + rest
+            notes.append(f"{len(rest)} other AC(s) proposed for W1 in {PROPOSAL}: review it, then a person runs "
+                         "`ekit wave approve --by \"Name\"`")
+        dump_yaml(pdata, root / PROPOSAL)
+    return notes
+
+
+W0_RECORD = ".ekit/ledger/w0-journeys.yaml"
+JOURNEY_GLOBS = ("tests/acceptance/journeys/**/*.feature", "tests/journeys/**/*.feature")
+
+
+def journey_files(root: Path) -> dict[str, str]:
+    """rel path -> sha256 of every journey feature file (the happy-path regression suite)."""
+    import hashlib
+    out: dict[str, str] = {}
+    for pat in JOURNEY_GLOBS:
+        for f in sorted(root.glob(pat)):
+            if f.is_file():
+                out[f.relative_to(root).as_posix()] = hashlib.sha256(f.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    return out
+
+
+def adoption_conditions(root: Path) -> list[str]:
+    """Problems that stop a project leaving a `skeleton` wave: design approved, smoke gate passing, baseline recorded."""
+    from . import design, gates, landing
+    from .project import Project
+    project = Project.load(root)
+    problems: list[str] = []
+    rec = design.approval(root)
+    if not rec:
+        problems.append("the design is not approved (`ekit design approve --by`)")
+    elif rec.get("fingerprint") != design.fingerprint(root):
+        problems.append("the design changed after it was approved (`ekit design approve --by` again)")
+    res, _ = gates.run_gate(project, "smoke")
+    for c in res.checks:
+        if c.status == "fail":
+            problems.append(f"gate smoke: {c.id}: {next((f.message.splitlines()[0] for f in c.findings if f.level == 'error'), 'failed')}")
+    state, detail = landing.status(project)
+    if state != "passed":
+        problems.append(f"the landing-zone baseline is {state} (run `ekit gate baseline`): {detail}")
+    return problems
 
 
 def advance(root: Path, kit: Any, by: str, carry: bool = False) -> tuple[str, str, list[str]]:
@@ -405,11 +551,19 @@ def advance(root: Path, kit: Any, by: str, carry: bool = False) -> tuple[str, st
     if i + 1 >= len(plan.ids):
         raise EkitError(f"{cur} is the last wave in the plan. Add a wave to the proposal and approve it first.")
     nxt = plan.ids[i + 1]
-    if not plan.wave(nxt).get("scope") and not carry:
+    leaving_skeleton = str(plan.wave(cur).get("rigor") or "") == "skeleton"
+    if not plan.wave(nxt).get("scope") and not carry and not leaving_skeleton:
         raise EkitError(f"{nxt} has no scope yet. Plan it in the proposal and approve it before moving there.")
-    progress = feature_progress(root)
-    open_acs = [ac for ac in plan.acs_of(cur) if not (progress.get(ac) or {}).get("green")]
     notes: list[str] = []
+    if leaving_skeleton:
+        # 0.7.0 adoption point: the journeys, not per-AC red/green, are the proof W0 is done
+        problems = adoption_conditions(root)
+        if problems:
+            raise EkitError(f"{cur} cannot be left yet (adoption point):\n  - " + "\n  - ".join(problems))
+        progress, open_acs = {}, []
+    else:
+        progress = feature_progress(root)
+        open_acs = [ac for ac in plan.acs_of(cur) if not (progress.get(ac) or {}).get("green")]
     data = plan.data
     if open_acs:
         if not carry:
@@ -437,6 +591,12 @@ def advance(root: Path, kit: Any, by: str, carry: bool = False) -> tuple[str, st
     hist = list(data.get("history") or [])
     hist.append({"action": "advance", "from": cur, "to": nxt, "by": by.strip(), "on": _today(),
                  **({"carried": open_acs} if open_acs else {})})
+    if leaving_skeleton:
+        files = journey_files(root)
+        dump_yaml({"apiVersion": "ekit/v1", "kind": "W0Journeys", "adopted_from": cur, "adopted_to": nxt, "by": by.strip(),
+                   "on": _today(), "files": files}, root / W0_RECORD)
+        notes.append(f"adoption point: {len(files)} journey file(s) fingerprinted in {W0_RECORD} (regression suite from now on); "
+                     f"rigor is now {plan.wave(nxt).get('rigor') or 'standard'}; commit it")
     data["history"] = hist
     require_valid(WavePlan(data, plan.index), kit)
     dump_yaml(data, root / APPROVED)
@@ -445,6 +605,9 @@ def advance(root: Path, kit: Any, by: str, carry: bool = False) -> tuple[str, st
         prop = load_yaml(root / PROPOSAL) or {}
         prop["waves"] = copy.deepcopy(data["waves"])
         dump_yaml(prop, root / PROPOSAL)
+    from . import logbook
+    logbook.append(root, {"kind": "state.wave.advance", "feature": None, "reason": f"{cur} -> {nxt} by {by.strip()}",
+                          "by": by.strip(), "via": logbook.via(), "actor": logbook.actor(root)})
     return cur, nxt, notes
 
 

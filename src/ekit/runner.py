@@ -68,6 +68,17 @@ def command_cwd(spec: Any, profile: Profile) -> Path:
     return profile.root
 
 
+def prepare_report_dirs(profile: Profile) -> None:
+    """Create the folders a command writes its reports to (0.6.0). pytest's `--cucumberjson=reports/x.json`
+    does not create `reports/` and fails with FileNotFoundError on Windows."""
+    if not profile.root.is_dir():
+        return
+    (profile.root / "reports").mkdir(exist_ok=True)
+    report = (profile.bdd or {}).get("report")
+    if report:
+        (profile.root / report).parent.mkdir(parents=True, exist_ok=True)
+
+
 def run_profile_command(
     profile: Profile, name: str, *, stream: bool = False, timeout: int | None = None
 ) -> RunResult | None:
@@ -78,6 +89,7 @@ def run_profile_command(
     if not cwd.is_dir():
         raise EkitError(f"Working directory for {profile.id}:{name} does not exist: {cwd}")
     argv = build_argv(spec, cwd)
+    prepare_report_dirs(profile)
     if stream:
         proc = subprocess.run(argv, cwd=cwd, timeout=timeout)
         return RunResult(profile.id, name, argv, cwd, proc.returncode, "")

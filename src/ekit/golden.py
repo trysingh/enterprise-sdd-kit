@@ -404,6 +404,41 @@ def feature_package(golden: Golden | None, feature: str) -> str | None:
     return tpl.format(number=m.group(1), slug=m.group(2).replace("-", "_"))
 
 
+def design_feature_package(project: Any, feat: str) -> str | None:
+    """0.7.1: `FEAT-02` -> its package. One package per FEAT- (`f002_<prd title slug>`) unless design.yaml groups
+    features under a shared `package:` key (`src/app/features/<package>`)."""
+    g = for_project(project)
+    if g is None:
+        return None
+    tpl = g.seams.get("feature_package")
+    if not tpl:
+        return None
+    from . import design
+    m = re.match(r"^FEAT-(\d{2})$", feat)
+    if not m:
+        raise EkitError(f"'{feat}' is not a FEAT-nn id.")
+    base = tpl.rsplit("/", 1)[0]
+    try:
+        data = design.load_design(project.root)
+    except EkitError:
+        data = {}
+    spec = (data.get("features") or {}).get(feat)
+    if not isinstance(spec, dict):
+        raise EkitError(f"{feat} is not under `features` in docs/design/design.yaml.")
+    if spec.get("package"):
+        return f"{base}/{spec['package']}"
+    from .waves import FEAT_HEADING_RE
+    slug = "feature"
+    req = project.root / "docs" / "requirements"
+    for prd in sorted(req.glob("*/prd.md")) if req.is_dir() else []:
+        for line in prd.read_text(encoding="utf-8").splitlines():
+            h = re.match(rf"^\s*#{{2,4}}\s+\**{feat}\b\**\s*[:\-–—]?\s*(.*?)\**\s*$", line)
+            if h and h.group(1).strip():
+                slug = re.sub(r"[^a-z0-9]+", "_", h.group(1).lower()).strip("_") or slug
+                break
+    return tpl.format(number=f"0{m.group(1)}", slug=slug)
+
+
 def feature_packages(project: Any, feature: str) -> list[str]:
     """0.5.0: the package(s) a feature folder's code lives in. A change request that fixes or extends
     existing features (change.yaml `affects.features`) works in *their* packages; a new feature, or a

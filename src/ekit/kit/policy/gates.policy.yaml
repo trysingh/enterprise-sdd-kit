@@ -17,7 +17,7 @@ apiVersion: ekit.policy/v1
 kind: GatePolicy
 metadata:
   name: enterprise-generic
-  version: 0.5.0
+  version: 0.7.0
 
 spec:
   defaults:
@@ -46,6 +46,9 @@ spec:
         - id: INTAKE-QUESTIONS-VALID
           type: questions.valid
           with: { file: "{prd_dir}/open-questions.yaml" }
+        - id: INTAKE-HAPPY-PATH
+          type: happy_path.valid       # 0.7.0 (happy-path lane): happy-path.md exists; every key FEAT is in >=1 journey
+          with: { file: "{prd_dir}/happy-path.md" }
         - id: INTAKE-CHANGE-VALID
           type: change.valid           # 0.5.0 (change requests only): change.yaml complete, request verbatim, affects/supersedes real
           with: { dir: "{prd_dir}" }
@@ -65,6 +68,79 @@ spec:
         - id: READY-CHANGE
           type: change.valid           # 0.5.0 (change requests only): also no [TBD in the bug facts
           with: { dir: "{prd_dir}", ready: true }
+
+    # ------------------------------------------------------------------ design (0.7.0)
+    - id: design
+      stage: prd->design
+      lane: happy-path             # `ekit gate all` runs it only in the happy-path lane; `ekit gate design` always works
+      description: The architecture note and design.yaml are complete, traced to the PRD and approved by a person.
+      context: project
+      checks:
+        - id: DESIGN-FILES
+          type: files.exist
+          with: { paths: ["docs/design/architecture.md", "docs/design/design.yaml"] }
+        - id: DESIGN-SECTIONS
+          type: design.sections
+          with: { file: docs/design/architecture.md }
+        - id: DESIGN-SCHEMA
+          type: design.schema
+          with: {}
+        - id: DESIGN-PORTS
+          type: design.ports           # every port has a dependency and >=1 method
+          with: {}
+        - id: DESIGN-SEAMS
+          type: design.seams           # all five Day-0 seams declared
+          with: {}
+        - id: DESIGN-FEATURES
+          type: design.features        # every key FEAT has >=1 operation or page and is in exactly one slice
+          with: {}
+        - id: DESIGN-BRS-LISTED
+          type: design.brs_listed      # every in-scope PRD feature is designed and lists all its BRs
+          with: {}
+        - id: DESIGN-DECISIONS
+          type: design.decisions       # status on every decision; accepted ones cite an existing ADR
+          with: {}
+        - id: DESIGN-JOURNEYS
+          type: design.journeys_declared
+          with: {}
+        - id: DESIGN-APPROVED
+          type: design.approved        # a person ran `ekit design approve --by`; stale after any edit
+          with: {}
+
+    # ------------------------------------------------------------------ smoke (0.7.0)
+    - id: smoke
+      stage: slice->adoption
+      lane: happy-path
+      description: Every key feature is reachable by a user and proven by a passing journey (BR -> FEAT -> operation/page -> journey).
+      context: project
+      checks:
+        - id: SMOKE-RUN
+          type: smoke.run              # runs the `journeys` profile command so the reports are fresh
+          with: {}
+        - id: SMOKE-JOURNEYS-PASS
+          type: smoke.journeys_pass
+          with: {}
+        - id: SMOKE-OPERATION-EXISTS
+          type: smoke.operation_exists
+          with: {}
+        - id: SMOKE-OPERATION-EXERCISED
+          type: smoke.operation_exercised
+          with: {}
+        - id: SMOKE-PAGE-REACHABLE
+          type: smoke.page_reachable
+          with: {}
+        - id: SMOKE-FEATURE-COVERED
+          type: smoke.feature_covered
+          with: {}
+        - id: SMOKE-W0-INTACT
+          type: smoke.w0_intact            # after the adoption point the W0 journeys are fingerprinted regression tests
+          with: {}
+        - id: DESIGN-PORTS-IMPLEMENTED
+          type: design.ports_implemented   # AST scan: Protocol + declared methods + dependency + adapter (+ fake: warn)
+          with: {}
+        - id: BASE-SEAMS-PRESENT
+          type: base.seams_present         # golden: the core still exposes the five Day-0 seams
+          with: {}
 
     # ------------------------------------------------------------------ spec quality
     - id: spec
@@ -156,6 +232,10 @@ spec:
         - id: GHERKIN-AC-COVERED
           type: gherkin.ac_covered
           with: { dir: "{feature_dir}/features", trace: "{feature_dir}/trace.yaml" }
+        - id: GHERKIN-UI-ENTRY
+          type: gherkin.ui_entry
+          severity: warn
+          with: { dir: "{feature_dir}/features" }
 
     # ------------------------------------------------------------------ TDD red
     - id: red
@@ -184,6 +264,10 @@ spec:
         - id: RED-CLEAN-FAILURE
           type: bdd.clean_failure      # a scenario must fail on an assertion, not error out of broken test glue
           with: { dir: "{feature_dir}/features" }
+        - id: RED-LINT
+          type: profile.command
+          severity: warn          # surface lint issues before the freeze, not after, at green
+          with: { command: lint }
         - id: RED-ROUTE-STUBBED
           type: bdd.route_stubbed      # 0.4.0 (golden): a scenario fails with 501 from a stub, never 404
           with: { dir: "{feature_dir}/features" }
@@ -266,6 +350,9 @@ spec:
           type: profile.command
           severity: warn
           with: { command: sca }
+        - id: GREEN-NO-DUMMY
+          type: green.no_dummy         # 0.7.0, enterprise rigor only (rigor.policy.yaml `add`): no Day-0 dummy in a non-dev environment
+          with: {}
         - id: GREEN-TASKS-DONE
           type: tasks.all_done
           severity: warn

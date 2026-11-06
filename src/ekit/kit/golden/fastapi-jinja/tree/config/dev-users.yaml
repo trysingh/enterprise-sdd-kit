@@ -1,0 +1,8 @@
+# DEV ONLY. Refused at startup when APP_ENV is not dev|test. Passwords are deliberately fake.
+# Day-0 seam "principal" (golden 1.1.0): journeys and Postman sign in as these names with HTTP Basic.
+# Add users freely; real identity (OIDC) replaces this file in a later wave.
+users:
+  asha:  {password: asha-dev,  display: Asha,  roles: [user]}
+  ravi:  {password: ravi-dev,  display: Ravi,  roles: [user]}
+  meera: {password: meera-dev, display: Meera, roles: [user]}
+  admin: {password: admin-dev, display: Admin, roles: [admin]}

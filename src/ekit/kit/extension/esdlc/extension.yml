@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: esdlc
   name: "Enterprise SDLC (BRD > PRD > SDD > TDD)"
-  version: "0.2.0"
+  version: "0.3.0"
   description: "Adds BRD intake, change requests from the prompt (bug / enhancement / feature), open-question loop, landing-zone baseline, Gherkin scenarios and red tests, each closed by a deterministic `ekit gate`."
   category: "process"
   effect: "read-write"
@@ -25,6 +25,12 @@ provides:
     - name: speckit.esdlc.questions
       file: commands/speckit.esdlc.questions.md
       description: "Work the open-questions register: answer interactively or export/import for the product manager; run gate ready"
+    - name: speckit.esdlc.design
+      file: commands/speckit.esdlc.design.md
+      description: "Fix the system's shape before any test: architecture note + design.yaml (topology, ports, data, interface, seams, slices); run gate design"
+    - name: speckit.esdlc.slice
+      file: commands/speckit.esdlc.slice.md
+      description: "Build one slice of the approved design (W0 happy path): ports, operations and Gherkin journeys; run gate smoke"
     - name: speckit.esdlc.baseline
       file: commands/speckit.esdlc.baseline.md
       description: "Build or assess the engineering landing zone for the project's stack; run gate baseline"
@@ -42,6 +48,15 @@ provides:
     - name: esdlc-prd-template
       file: templates/esdlc-prd-template.md
       description: "PRD with FEAT-## features and AC-### acceptance criteria"
+    - name: esdlc-happy-path-template
+      file: templates/esdlc-happy-path-template.md
+      description: "Happy path: key features and cross-feature journeys"
+    - name: esdlc-architecture-template
+      file: templates/esdlc-architecture-template.md
+      description: "Architecture note: topology, ports, data, interface, seams, slices, decisions"
+    - name: esdlc-design-template
+      file: templates/esdlc-design-template.yaml
+      description: "design.yaml: machine-readable design and spine of traceability"
     - name: esdlc-questions-template
       file: templates/esdlc-questions-template.md
       description: "Open questions register"

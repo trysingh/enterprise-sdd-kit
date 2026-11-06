@@ -1,0 +1,37 @@
+# Rigor policy (0.7.0): which checks run at which rigor level.
+#
+# Rigor is a property of the wave. `.ekit/waves.yaml` gives each wave a `rigor:` (W0 `skeleton`,
+# W1.. `standard`, overlay waves `enterprise`). Without waves, or with a wave that names no rigor,
+# nothing here applies and gates behave exactly as in 0.6.4.
+#
+# (`on` / `off` are quoted keys: unquoted they are booleans in YAML 1.1.)
+# A name in `on` / `off` is a gate id (`red`), a check id (`BASE-GOLDEN-INTACT`) or an alias below.
+# For one check: matched by `on` (its own id or an alias) -> runs; else matched by `off` (its gate,
+# its id or an alias) -> skipped; else runs. `on: all` means nothing is switched off by the level.
+# `add` lists checks that exist ONLY at that level (they are skipped, and named, at every other level).
+# Every gate report names the level and lists the checks skipped because of it.
+# Raising rigor is a person action (`ekit wave advance`); lowering it is an override.
+apiVersion: ekit.policy/v1
+kind: RigorPolicy
+metadata:
+  name: enterprise-generic
+  version: 0.1.0
+
+aliases:
+  lint:              [BASE-LINT, GREEN-LINT]          # RED-LINT stays with the (off) red gate
+  unit:              [GREEN-UNIT]
+  coverage:          [GREEN-COVERAGE]
+  sca:               [GREEN-SCA]
+  ENV-01:            [BASE-ENV, GREEN-ENV]
+  NFR-feature-rows:  [PLAN-NFR-CONFORMANCE]
+  overlays:          []
+
+levels:
+  skeleton:      # W0: a thin but working app against simulated cross-cutting concerns
+    "on":  [intake, ready, design, smoke, BASE-SEAMS-PRESENT, BASE-GOLDEN-INTACT, ENV-01, lint, unit]
+    "off": [spec, scenarios, plan, red, red-recorded, green, NFR-feature-rows, coverage, sca]
+  standard:      # W1..: everything as in 0.6.4
+    "on": all
+  enterprise:    # overlay waves: real controls replace the dummies
+    "on": all
+    add: [GREEN-NO-DUMMY, overlays]

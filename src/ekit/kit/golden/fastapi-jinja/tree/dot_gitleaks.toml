@@ -1,0 +1,4 @@
+# SEC-04: the one place fake credentials are allowed (Day-0 dev users, refused outside dev|test).
+[allowlist]
+description = "dev-only fake credentials"
+paths = ['''config/dev-users\.yaml''']
