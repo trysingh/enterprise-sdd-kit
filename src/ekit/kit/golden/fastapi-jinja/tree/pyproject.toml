@@ -48,6 +48,8 @@ source = ["src/app"]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+# Spec Kit, OpenCode and ekit tooling live here; it is not this project's code.
+extend-exclude = [".specify", ".opencode", ".ekit"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S", "BLE", "SIM"]

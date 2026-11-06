@@ -71,8 +71,8 @@ def _ctx(project: Project, feature: str | None = None) -> checks.GateContext:
 # ===================================================================== kit wiring
 def test_kit_offers_golden_for_fastapi_jinja_only_and_policy_wires_the_new_checks():
     kit = Kit.load(KIT)
-    assert kit.version == "0.4.0" and kit.manifest["requires"]["ekit"] == ">=0.4.0,<0.5"
-    assert golden.for_stack(kit, "fastapi-jinja").version == "1.0.0"
+    assert kit.version == "0.4.1" and kit.manifest["requires"]["ekit"] == ">=0.4.0,<0.5"
+    assert golden.for_stack(kit, "fastapi-jinja").version == "1.0.1"
     assert all(golden.for_stack(kit, s) is None for s in kit.stacks if s != "fastapi-jinja")
     ids = {c["id"] for g in kit.policy()["spec"]["gates"] for c in g["checks"]}
     assert {"BASE-CONSTITUTION", "BASE-GOLDEN-INTACT", "RED-STATE-TYPED", "RED-NO-EXEMPLAR",
@@ -152,8 +152,8 @@ def test_install_renders_renames_fingerprints_ratifies_and_freezes(tmp_path):
     assert 'name = "demo-bank"' in (root / "pyproject.toml").read_text()
     assert "__PROJECT_" not in (root / "src/app/core/settings.py").read_text()
     lock = golden.read_lock(root)
-    assert lock["version"] == "1.0.0" and "src/app/main.py" in lock["files"] and lock["project_name"] == "Demo Bank"
-    assert project.config["baseline"] == {"mode": "golden", "golden_version": "1.0.0"}
+    assert lock["version"] == "1.0.1" and "src/app/main.py" in lock["files"] and lock["project_name"] == "Demo Bank"
+    assert project.config["baseline"] == {"mode": "golden", "golden_version": "1.0.1"}
     # constitution: ratified without a model, principles intact
     text = (root / constitution.MEMORY).read_text()
     assert "# Demo Bank Constitution" in text and not constitution.placeholders(text)
@@ -180,7 +180,7 @@ def test_installed_golden_passes_the_static_baseline_checks(tmp_path):
 def test_agents_block_carries_the_golden_rules(tmp_path):
     project = _golden_project(tmp_path)
     block = installer.render_agents_block(project)
-    assert "Golden landing zone (fastapi-jinja 1.0.0)" in block and "ekit feature package" in block
+    assert "Golden landing zone (fastapi-jinja 1.0.1)" in block and "ekit feature package" in block
     assert "ekit adr new" in block and "ekit baseline unfreeze|accept|install" in block
 
 
@@ -465,8 +465,8 @@ def test_baseline_record_names_its_provenance_and_goes_stale_on_accept(tmp_path)
     _git(project.root, "commit", "-qm", "golden")
     landing.record(project)
     rec = yaml.safe_load((project.root / landing.RECORD).read_text())
-    assert rec["baseline_mode"] == "golden" and rec["golden"] == {"stack": "fastapi-jinja", "version": "1.0.0"}
-    assert landing.status(project)[0] == "passed" and "golden 1.0.0" in landing.status(project)[1]
+    assert rec["baseline_mode"] == "golden" and rec["golden"] == {"stack": "fastapi-jinja", "version": "1.0.1"}
+    assert landing.status(project)[0] == "passed" and "golden 1.0.1" in landing.status(project)[1]
     (project.root / "src/app/core/http.py").write_text("# changed\n", encoding="utf-8")
     golden.accept(project.root, "reviewed")
     state, detail = landing.status(project)

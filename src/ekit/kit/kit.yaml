@@ -5,7 +5,7 @@ apiVersion: ekit/v1
 kind: Kit
 metadata:
   name: enterprise-sdd-kit
-  version: 0.4.0          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
+  version: 0.4.1          # bump on any content change; pinned per project in .ekit/kit.lock.yaml
   description: >-
     BRD > PRD > SDD > TDD landing zone for GitHub Spec Kit + OpenCode with a
     generic enterprise engineering baseline and locally enforced gates.

@@ -11,7 +11,7 @@ apiVersion: ekit/v1
 kind: GoldenLandingZone
 metadata:
   stack: fastapi-jinja
-  version: 1.0.0            # golden revision; bump on any change under tree/
+  version: 1.0.1            # golden revision; bump on any change under tree/
   description: FastAPI + server-rendered Jinja2, uv, pytest-bdd; typed scenario context and shared steps
 
 # Files whose text contains __PROJECT_NAME__ / __PROJECT_SLUG__ placeholders (replaced on install).

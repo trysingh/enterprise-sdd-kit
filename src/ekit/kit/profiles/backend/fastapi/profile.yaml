@@ -50,8 +50,9 @@ layout:          # relative to the stack's backend root
 # Exit code 0 = pass. `report` is the Cucumber-JSON file the acceptance run writes.
 commands:
   install:    ["uv", "sync", "--locked", "--all-extras"]
-  lint:       ["uv", "run", "--locked", "ruff", "check", "."]
-  format:     ["uv", "run", "--locked", "ruff", "format", "--check", "."]
+  # .specify / .opencode / .ekit hold Spec Kit, OpenCode and ekit tooling, not project code (0.4.1)
+  lint:       ["uv", "run", "--locked", "ruff", "check", "--extend-exclude", ".specify,.opencode,.ekit", "."]
+  format:     ["uv", "run", "--locked", "ruff", "format", "--check", "--extend-exclude", ".specify,.opencode,.ekit", "."]
   typecheck:  ["uv", "run", "--locked", "mypy", "src"]
   typecheck_glue:  ["uv", "run", "--locked", "mypy", "--follow-imports=silent", "--show-error-codes", "--no-error-summary"]
   unit:       ["uv", "run", "--locked", "pytest", "tests/unit", "-q"]

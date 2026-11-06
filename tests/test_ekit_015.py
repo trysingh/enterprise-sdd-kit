@@ -128,4 +128,4 @@ def test_ready_gate_fails_a_blocking_answer_without_answered_by(tmp_path):
 def test_bundled_kit_requires_the_fixed_cli(tmp_path):
     root, lock = _pinned_project(tmp_path)
     kit = yaml.safe_load((root / ".ekit/kit/kit.yaml").read_text())
-    assert kit["requires"]["ekit"] == ">=0.4.0,<0.5" and lock['kit']['version'] == '0.4.0'
+    assert kit["requires"]["ekit"] == ">=0.4.0,<0.5" and lock['kit']['version'] == '0.4.1'

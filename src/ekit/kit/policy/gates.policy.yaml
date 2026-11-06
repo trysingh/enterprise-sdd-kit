@@ -17,7 +17,7 @@ apiVersion: ekit.policy/v1
 kind: GatePolicy
 metadata:
   name: enterprise-generic
-  version: 0.4.0
+  version: 0.4.1
 
 spec:
   defaults:
